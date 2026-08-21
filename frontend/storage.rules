@@ -1,0 +1,17 @@
+rules_version = '2';
+
+// Deploy: `npx -y firebase-tools@latest deploy --only storage`
+// No Firebase Auth required: clients upload directly; store the download URL in Supabase (submissions.video_url or assets.video_url). Accepts demo videos or images under demo-videos/.
+// Tighten for production (e.g. App Check, auth, or server-signed uploads) — open client writes are abusable.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /demo-videos/{allPaths=**} {
+      allow read: if true;
+      // Video: no app-enforced size cap (Firebase/Cloud Storage enforces product limits).
+      allow create: if request.resource.contentType.matches('video/.*')
+        || (request.resource.contentType.matches('image/.*')
+          && request.resource.size < 25 * 1024 * 1024);
+      allow update, delete: if false;
+    }
+  }
+}

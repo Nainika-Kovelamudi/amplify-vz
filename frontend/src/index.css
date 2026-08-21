@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  /* App-wide typeface: Poppins for both sans and mono utilities */
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol";
+  --font-mono: "Poppins", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  :root {
+    --background: #FAFBFC;
+    --foreground: #1a1a2e;
+    
+    --primary: #0EA5E9;
+    --primary-foreground: #ffffff;
+    
+    --secondary: #8B5CF6;
+    --secondary-foreground: #ffffff;
+  }
+
+  html {
+    font-family: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: inherit;
+  }
+
+  #root {
+    font-family: inherit;
+  }
+
+  /* Form controls often use the UA font unless forced to inherit */
+  button,
+  input,
+  textarea,
+  select,
+  optgroup {
+    font-family: inherit;
+  }
+
+  ::selection {
+    background-color: var(--primary);
+    color: white;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .field-input {
+    @apply w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100;
+  }
+
+  select.field-input {
+    @apply appearance-none pr-10 bg-no-repeat;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236B7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+    background-position: right 0.75rem center;
+    background-size: 1.25rem 1.25rem;
+  }
+}
