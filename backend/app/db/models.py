@@ -162,6 +162,8 @@ class CatalogAsset(Base):
     manager_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     manager_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     designation: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    aiv_ideation_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    aiv_ideation_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     status: Mapped[AssetStatus] = mapped_column(
         SAEnum(AssetStatus, name="asset_status_enum"), nullable=False, default=AssetStatus.Draft
     )
@@ -225,6 +227,8 @@ class Submission(Base):
     category: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # Attachments
     architecture_file_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    aiv_ideation_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    aiv_ideation_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     status: Mapped[SubmissionStatus] = mapped_column(
         SAEnum(SubmissionStatus, name="submission_status_enum"),
         nullable=False,
@@ -240,6 +244,13 @@ class Submission(Base):
         UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=True
     )
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_reviewer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=True, index=True
+    )
+    assigned_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=True
+    )
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -450,6 +461,12 @@ class DemoRequest(Base):
     requester_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     vertical: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="Pending", server_default="Pending", index=True)
+    decision_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=True
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     requested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

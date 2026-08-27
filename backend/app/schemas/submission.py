@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class SubmissionCreate(BaseModel):
+    aiv_ideation_id: Optional[str] = None
     title: str
     description: str
     family: str
@@ -35,6 +36,7 @@ class SubmissionCreate(BaseModel):
 
 
 class SubmissionUpdate(BaseModel):
+    aiv_ideation_id: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
     family: Optional[str] = None
@@ -63,6 +65,7 @@ class SubmissionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    catalog_asset_id: Optional[str] = None
     title: str
     description: str
     family: str
@@ -93,6 +96,12 @@ class SubmissionResponse(BaseModel):
     designation: Optional[str] = None
     category: Optional[str] = None
     architecture_file_url: Optional[str] = None
+    aiv_ideation_id: Optional[str] = None
+    aiv_ideation_title: Optional[str] = None
+    assigned_reviewer_id: Optional[UUID] = None
+    assigned_reviewer_name: Optional[str] = None
+    assigned_reviewer_email: Optional[str] = None
+    assigned_at: Optional[datetime] = None
 
 
 class SubmissionListResponse(BaseModel):

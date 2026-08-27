@@ -1,7 +1,10 @@
 import { apiClient } from './apiClient';
 
 export interface Submission {
+  aiv_ideation_id: string | null;
+  aiv_ideation_title: string | null;
   id: string;
+  catalog_asset_id?: string | null;
   title: string;
   description: string;
   family: string;
@@ -21,6 +24,10 @@ export interface Submission {
   submitter_id: string;
   created_at: string;
   updated_at: string;
+  assigned_reviewer_id?: string;
+  assigned_reviewer_name?: string;
+  assigned_reviewer_email?: string;
+  assigned_at?: string;
   // Section 1
   owner_name: string | null;
   owner_email: string | null;
@@ -35,6 +42,7 @@ export interface Submission {
 }
 
 export interface SubmissionCreate {
+  aiv_ideation_id: string;
   title: string;
   description: string;
   family: string;
@@ -49,13 +57,20 @@ export interface SubmissionCreate {
   repo_url?: string;
 }
 
+export interface ApprovedIdeation { id: string; title: string }
+
+export async function getApprovedIdeations(): Promise<ApprovedIdeation[]> {
+  const { data } = await apiClient.get<{ items: ApprovedIdeation[] }>('/integrations/aiv/ideations');
+  return data.items;
+}
+
 export interface SubmissionListResponse {
   items: Submission[];
   total: number;
 }
 
-export async function getMySubmissions(): Promise<SubmissionListResponse> {
-  const { data } = await apiClient.get<SubmissionListResponse>('/submissions/mine');
+export async function getMySubmissions(params?: { skip?: number; limit?: number }): Promise<SubmissionListResponse> {
+  const { data } = await apiClient.get<SubmissionListResponse>('/submissions/mine', { params });
   return data;
 }
 

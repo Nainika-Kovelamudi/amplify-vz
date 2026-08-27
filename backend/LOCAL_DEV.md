@@ -45,7 +45,7 @@ cp .env.local .env
 
 Edit `.env` and set your real Groq key:
 ```
-GROQ_API_KEY=<your-groq-api-key>
+GROQ_API_KEY=gsk_your_actual_key_here
 ```
 
 ---

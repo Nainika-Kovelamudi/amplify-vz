@@ -6,6 +6,7 @@ export interface AdminStats {
   awaiting_publish: number;
   published_assets: number;
   pending_clones: number;
+  pending_demos: number;
   total_users: number;
 }
 
@@ -129,6 +130,16 @@ export async function getPendingApprovals(params?: { department?: string; skip?:
   return data;
 }
 
+export async function getMyReviewQueue(params?: { skip?: number; limit?: number }): Promise<SubmissionListResponse> {
+  const { data } = await apiClient.get<SubmissionListResponse>('/admin/my-review-queue', { params });
+  return data;
+}
+
+export async function assignSubmissionReview(id: string, email: string): Promise<Submission> {
+  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/assign`, { email });
+  return data;
+}
+
 export async function approveSubmission(id: string, notes?: string): Promise<Submission> {
   const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/approve`, notes ? { notes } : {});
   return data;
@@ -171,6 +182,41 @@ export async function getExecutiveReport(days = 30): Promise<ExecutiveReport> {
   return data;
 }
 
+export type ExecutiveReportFormat = 'docx' | 'xlsx' | 'pdf';
+
+export async function downloadExecutiveReport(days = 30, format: ExecutiveReportFormat = 'docx'): Promise<void> {
+  const response = await apiClient.get<Blob>('/admin/executive-report/download', {
+    params: { days, format }, responseType: 'blob',
+  });
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `AIMPLIFY_Executive_Report_${new Date().toISOString().slice(0, 10)}.${format}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function downloadObservabilityReport(format: ExecutiveReportFormat = 'xlsx'): Promise<void> {
+  const response = await apiClient.get<Blob>('/admin/observability-report/download', {
+    params: { format }, responseType: 'blob',
+  });
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `AIMPLIFY_Observability_Report_${new Date().toISOString().slice(0, 10)}.${format}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function sendExecutiveReportTestEmail(days = 30, format: ExecutiveReportFormat = 'docx'): Promise<{ status: string; recipient: string; format: string }> {
+  const { data } = await apiClient.post<{ status: string; recipient: string; format: string }>('/admin/executive-report/test-email', null, { params: { days, format } });
+  return data;
+}
+
 // ── Users ────────────────────────────────────────────────────────────────────
 
 export async function getUsers(params?: { role?: string; department?: string; search?: string; skip?: number; limit?: number }): Promise<UserListResponse> {
@@ -201,4 +247,22 @@ export function exportAuditLogsUrl(params?: Record<string, string>): string {
   const base = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000';
   const qs = params ? '?' + new URLSearchParams(params).toString() : '';
   return `${base}/admin/audit/export${qs}`;
+}
+
+export async function downloadAuditLogs(params?: {
+  action?: string; entity_type?: string; actor_email?: string;
+  date_from?: string; date_to?: string;
+}): Promise<void> {
+  const response = await apiClient.post<Blob>('/admin/audit/export', null, {
+    params,
+    responseType: 'blob',
+  });
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `aimplify-audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }

@@ -11,6 +11,7 @@ from app.db.base import get_db
 from app.db.models import ActivityLog, Submission, SubmissionComment, UserProfile, UserRole
 from app.deps.rbac import require_role
 from app.schemas.comment import CommentCreate, CommentResponse
+from app.services.notification_service import push_notification
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Comments"])
@@ -94,32 +95,40 @@ async def add_comment(
 
 
 async def _notify_comment(db: AsyncSession, sub: Submission, comment: SubmissionComment, author: UserProfile) -> None:
-    """Email the other party when a comment is posted."""
+    """Notify every submission participant except the comment author."""
     try:
         from app.services.email_service import _send, _wrap, _meta_table, _meta_row, _PLATFORM  # type: ignore[attr-defined]
         from app.config import get_settings
         settings = get_settings()
 
-        author_role = author.role.value if hasattr(author.role, "value") else author.role
-        is_admin_or_owner = author_role in ("Aimplify.Admin", "Aimplify.Owner")
+        # The conversation audience is the submitter plus every Admin and Owner.
+        # Deduplicate users and never send a notification back to the author.
+        recipients: dict[str, UserProfile] = {}
+        submitter_result = await db.execute(select(UserProfile).where(UserProfile.id == sub.submitter_id))
+        submitter = submitter_result.scalars().first()
+        if submitter:
+            recipients[str(submitter.id)] = submitter
 
-        recipient_emails: list[str] = []
+        reviewers_result = await db.execute(
+            select(UserProfile).where(UserProfile.role.in_([UserRole.admin, UserRole.owner]))
+        )
+        for reviewer in reviewers_result.scalars().all():
+            recipients[str(reviewer.id)] = reviewer
+        recipients.pop(str(author.id), None)
 
-        if is_admin_or_owner:
-            # Notify the submitter
-            submitter_result = await db.execute(select(UserProfile).where(UserProfile.id == sub.submitter_id))
-            submitter = submitter_result.scalars().first()
-            if submitter:
-                recipient_emails.append(submitter.email)
-        else:
-            # Notify all admins + platform owners
-            admins_result = await db.execute(
-                select(UserProfile).where(UserProfile.role.in_([UserRole.admin, UserRole.owner]))
+        notification_title = f'New comment on "{sub.title}"'
+        notification_body = f'{author.display_name or author.email}: {comment.body}'
+        for recipient in recipients.values():
+            await push_notification(
+                db,
+                str(recipient.id),
+                notification_title,
+                notification_body,
+                "submission_comment_added",
+                str(sub.id),
             )
-            for a in admins_result.scalars().all():
-                recipient_emails.append(a.email)
 
-        detail_url = f"{settings.frontend_url}/pipeline"
+        detail_url = f"{settings.frontend_url}/pipeline/{sub.id}"
         body_html = f"""<p style="margin:0 0 16px;">
           <strong>{author.display_name or author.email}</strong> left a comment on submission
           <strong>"{sub.title}"</strong>.
@@ -134,14 +143,14 @@ async def _notify_comment(db: AsyncSession, sub: Submission, comment: Submission
           </a>
         </p>"""
 
-        for email in recipient_emails:
+        for recipient in recipients.values():
             try:
                 await _send(
-                    email,
+                    recipient.email,
                     f"[{_PLATFORM}] New comment on '{sub.title}'",
                     _wrap("#0EA5E9", "SUBMISSION COMMENT", body_html),
                 )
             except Exception as exc:
-                logger.warning("Failed to send comment notification to %s: %s", email, exc)
+                logger.warning("Failed to send comment notification to %s: %s", recipient.email, exc)
     except Exception as exc:
         logger.warning("Comment notification skipped: %s", exc)

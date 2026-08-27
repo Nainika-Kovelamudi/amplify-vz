@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { cn } from '../../utils/cn';
 import { useAuth } from '../../context/AuthContext';
-import { loadSubmissions } from '../../lib/pipeline';
+import { getMySubmissions } from '../../lib/submissionService';
 import { getAdminStats } from '../../lib/adminService';
 import { getCatalog, type CatalogAsset } from '../../lib/catalogService';
 import { useFamilies } from '../../context/FamiliesContext';
@@ -53,7 +53,7 @@ export function MainLayout() {
     let cancelled = false;
 
     async function hydratePendingCount() {
-      const submissions = await loadSubmissions();
+      const { items: submissions } = await getMySubmissions({ limit: 100 });
       if (!cancelled) {
         setPendingCount(submissions.filter((submission) => submission.status !== 'Published').length);
       }
@@ -116,7 +116,17 @@ export function MainLayout() {
   }, []);
 
   const handleNotifOpen = async () => {
-    setNotifOpen((v) => !v);
+    const opening = !notifOpen;
+    setNotifOpen(opening);
+    if (opening) {
+      try {
+        const result = await getNotifications({ limit: 30 });
+        setNotifications(result.items);
+        setUnreadCount(result.unread_count);
+      } catch {
+        // Keep the last successfully loaded notification list.
+      }
+    }
   };
 
   const handleMarkAllRead = async () => {
@@ -417,7 +427,7 @@ export function MainLayout() {
             >
               <div className="relative flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/80 text-xs font-bold text-white shadow-sm ring-2 ring-white">
                 {(user.display_name ?? user.email).slice(0, 2).toUpperCase()}
-                {isAdmin && (
+                {isSuperAdmin && (
                   <span className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 ring-1 ring-white">
                     <ShieldCheck className="h-2 w-2 text-white" />
                   </span>
@@ -441,7 +451,7 @@ export function MainLayout() {
                       onClick={() => { setIsProfileOpen(false); navigate('/admin'); }}
                     >
                       <ShieldCheck className="h-4 w-4" />
-                      Admin Dashboard
+                      Observability
                       {pendingApprovals > 0 && (
                         <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white">
                           {pendingApprovals > 9 ? '9+' : pendingApprovals}
@@ -470,13 +480,6 @@ export function MainLayout() {
                         >
                           <BarChart3 className="h-4 w-4" />
                           Executive Reports
-                        </button>
-                        <button
-                          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                          onClick={() => { setIsProfileOpen(false); navigate('/admin/observability'); }}
-                        >
-                          <BarChart3 className="h-4 w-4" />
-                          Observability
                         </button>
                       </>
                     )}
@@ -557,7 +560,7 @@ export function MainLayout() {
                     </li>
                   );
                 })}
-                {isAdmin && (
+                {isSuperAdmin && (
                   <li>
                     <button
                       onClick={() => navigate('/admin')}
@@ -567,7 +570,7 @@ export function MainLayout() {
                       )}
                     >
                       <ShieldCheck className="h-4 w-4 shrink-0" />
-                      Admin Dashboard
+                      Observability
                       {pendingApprovals > 0 && (
                         <span className="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-bold text-white">
                           {pendingApprovals > 9 ? '9+' : pendingApprovals}

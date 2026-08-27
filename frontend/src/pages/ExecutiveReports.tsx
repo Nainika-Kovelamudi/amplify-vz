@@ -1,9 +1,9 @@
 import { type ElementType, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity, AlertTriangle, BarChart3, CheckCircle2, Clock3, Download,
-  Eye, FileCheck2, GitBranch, LogIn, RefreshCw, Rocket, RotateCcw, Send, Sparkles, Trophy, Users,
+  Activity, BarChart3, CheckCircle2, Clock3, Download,
+  Eye, FileCheck2, GitBranch, LogIn, Mail, RefreshCw, Rocket, RotateCcw, Send, Sparkles, Trophy, Users,
 } from 'lucide-react';
-import { getExecutiveReport, type ExecutiveReport, type ReportBreakdown } from '../lib/adminService';
+import { downloadExecutiveReport, getExecutiveReport, sendExecutiveReportTestEmail, type ExecutiveReport, type ExecutiveReportFormat, type ReportBreakdown } from '../lib/adminService';
 
 const STATUS_LABELS: Record<string, string> = {
   Submitted: 'AI Processing', Manual_Approval: 'Admin Review', Approved: 'Awaiting Publish',
@@ -13,7 +13,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const EVENT_ICONS: Record<string, ElementType> = {
   asset_viewed: Eye, user_login: LogIn, assets_revised: RotateCcw,
-  new_submission: Send, deployment: Rocket,
+  new_submission: Send, published_asset: Rocket,
 };
 const FAMILY_TONES = ['bg-indigo-500', 'bg-violet-500', 'bg-cyan-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500'];
 
@@ -72,6 +72,10 @@ export function ExecutiveReports() {
   const [report, setReport] = useState<ExecutiveReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [mailStatus, setMailStatus] = useState('');
+  const [reportFormat, setReportFormat] = useState<ExecutiveReportFormat>('pdf');
 
   const load = useCallback(() => {
     setLoading(true); setError('');
@@ -82,6 +86,22 @@ export function ExecutiveReports() {
   }, [days]);
 
   useEffect(() => { load(); }, [load]);
+
+  const downloadReport = async () => {
+    setDownloading(true); setError('');
+    try { await downloadExecutiveReport(days, reportFormat); }
+    catch { setError(`The ${reportFormat.toUpperCase()} report could not be downloaded.`); }
+    finally { setDownloading(false); }
+  };
+
+  const sendTestMail = async () => {
+    setSendingTest(true); setError(''); setMailStatus('');
+    try {
+      const result = await sendExecutiveReportTestEmail(days, reportFormat);
+      setMailStatus(`Dashboard email with ${result.format.toUpperCase()} attachment sent to ${result.recipient}`);
+    } catch { setError('The test report email could not be sent. Check the backend email configuration.'); }
+    finally { setSendingTest(false); }
+  };
 
   const trend = useMemo(() => {
     const points = report?.daily_trend ?? [];
@@ -99,14 +119,6 @@ export function ExecutiveReports() {
 
   const s = report?.summary;
   const maxEvent = Math.max(1, ...(report?.top_events.map(event => event.count) ?? [1]));
-  const adoptionItems: Array<{ label: string; value: number; icon: ElementType }> = [
-    { label: 'Catalog views', value: report?.engagement.catalog_views ?? 0, icon: Eye },
-    { label: 'Downloads', value: report?.engagement.artifact_downloads ?? 0, icon: Download },
-    { label: 'Demo views', value: report?.engagement.demo_views ?? 0, icon: Activity },
-    { label: 'Clone requests', value: report?.engagement.clone_requests ?? 0, icon: GitBranch },
-    { label: 'Demo requests', value: report?.engagement.demo_requests ?? 0, icon: AlertTriangle },
-    { label: 'Active users', value: report?.engagement.active_users ?? 0, icon: Users },
-  ];
   return (
     <div className="min-h-screen bg-slate-50/70 px-4 py-8 md:px-10">
       <div className="mx-auto max-w-screen-2xl">
@@ -120,37 +132,47 @@ export function ExecutiveReports() {
             <select value={days} onChange={e => setDays(Number(e.target.value))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm">
               <option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last 12 months</option>
             </select>
+            <select value={reportFormat} onChange={e => setReportFormat(e.target.value as ExecutiveReportFormat)} aria-label="Executive report format" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm">
+              <option value="docx">Word</option><option value="xlsx">Excel</option><option value="pdf">PDF</option>
+            </select>
+            <button onClick={() => void downloadReport()} disabled={downloading} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm disabled:opacity-50"><Download className="h-3.5 w-3.5" />{downloading ? 'Preparing…' : 'Download'}</button>
+            <button onClick={() => void sendTestMail()} disabled={sendingTest} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm disabled:opacity-50"><Mail className="h-3.5 w-3.5" />{sendingTest ? 'Sending…' : 'Send Mail'}</button>
             <button onClick={load} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
           </div>
         </div>
 
         {error && <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
+        {mailStatus && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{mailStatus}</div>}
 
-        {s && <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-          <MetricCard label="Total assets" value={s.total_assets} hint="Published + L1 + L2" icon={BarChart3} tone="bg-slate-100 text-slate-600" />
-          <MetricCard label="Published assets" value={s.published_assets} hint="Live in catalog" icon={CheckCircle2} tone="bg-emerald-50 text-emerald-600" />
-          <MetricCard label="Awaiting review" value={s.awaiting_review} hint="Total L1 and L2 queue" icon={Clock3} tone="bg-amber-50 text-amber-600" />
-          <MetricCard label="L1 waiting approval" value={s.l1_waiting_approval} hint="Manual approval queue" icon={FileCheck2} tone="bg-sky-50 text-sky-600" />
-          <MetricCard label="L2 waiting approval" value={s.l2_waiting_approval} hint="Awaiting final publish" icon={Rocket} tone="bg-violet-50 text-violet-600" />
-        </div>}
+        {s && <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 text-sm font-bold text-slate-800">Assets Catalog</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            <MetricCard label="Total assets" value={s.total_assets} hint="Published + in-progress submissions" icon={BarChart3} tone="bg-slate-100 text-slate-600" />
+            <MetricCard label="Published assets" value={s.published_assets} hint="Live in catalog" icon={CheckCircle2} tone="bg-emerald-50 text-emerald-600" />
+            <MetricCard label="Awaiting review" value={s.awaiting_review} hint="Total L1 and L2 queue" icon={Clock3} tone="bg-amber-50 text-amber-600" />
+            <MetricCard label="L1 waiting approval" value={s.l1_waiting_approval} hint="Manual approval queue" icon={FileCheck2} tone="bg-sky-50 text-sky-600" />
+            <MetricCard label="L2 waiting approval" value={s.l2_waiting_approval} hint="Awaiting final publish" icon={Rocket} tone="bg-violet-50 text-violet-600" />
+          </div>
+        </section>}
 
         <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-bold text-slate-800">Asset families</h2><p className="mb-4 mt-0.5 text-xs text-slate-400">Published assets grouped by the home dashboard families</p>
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
             {(report?.family_assets ?? []).map((family, index) => <div key={family.name} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
               <div className={`mb-3 h-1.5 rounded-full ${FAMILY_TONES[index % FAMILY_TONES.length]}`} /><p className="truncate text-xs font-bold text-slate-700">{family.name}</p>
-              <div className="mt-2 flex items-end justify-between"><span className="text-2xl font-extrabold text-slate-900">{family.asset_count}</span><span className="text-[10px] font-bold text-slate-400">{family.percentage}%</span></div>
+              <div className="mt-2 flex items-end justify-between"><span className="text-2xl font-extrabold text-slate-900">{family.asset_count}</span><span className="text-[10px] font-bold text-slate-400">{Math.round(family.percentage)}%</span></div>
             </div>)}
             {!report?.family_assets.length && <p className="col-span-full py-6 text-center text-xs text-slate-400">No published family data.</p>}
           </div>
         </div>
 
         <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-bold text-slate-800">Platform usage</h2><p className="mb-4 mt-0.5 text-xs text-slate-400">Observability for the selected {days}-day period</p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <h2 className="text-sm font-bold text-slate-800">Platform Adoption</h2><p className="mb-4 mt-0.5 text-xs text-slate-400">Observability for the selected {days}-day period</p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {[
               ['Active users', report?.engagement.active_users ?? 0, Users], ['Asset views', report?.engagement.catalog_views ?? 0, Eye],
-              ['Downloads', report?.engagement.artifact_downloads ?? 0, Download], ['Clone requests', report?.engagement.clone_requests ?? 0, GitBranch],
+              ['Demo views', report?.engagement.demo_views ?? 0, Activity], ['Downloads', report?.engagement.artifact_downloads ?? 0, Download],
+              ['Clone requests', report?.engagement.clone_requests ?? 0, GitBranch],
               ['Demo requests', report?.engagement.demo_requests ?? 0, Activity],
             ].map(([label, value, Icon]) => { const UsageIcon = Icon as ElementType; return <div key={label as string} className="flex items-center gap-3 rounded-xl bg-slate-50 p-4"><div className="rounded-lg bg-indigo-50 p-2.5 text-indigo-600"><UsageIcon className="h-4 w-4" /></div><div><p className="text-xl font-extrabold text-slate-800">{Number(value).toLocaleString()}</p><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label as string}</p></div></div>; })}
           </div>
@@ -201,12 +223,6 @@ export function ExecutiveReports() {
 
         <div className="mb-6 grid gap-6 xl:grid-cols-2"><BreakdownTable title="Performance by department" rows={report?.departments ?? []} /><BreakdownTable title="Performance by platform family" rows={report?.families ?? []} /></div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-bold text-slate-800">Platform adoption</h2>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-            {adoptionItems.map(({ label, value, icon: Icon }) => <div key={label} className="rounded-xl bg-slate-50 p-4"><Icon className="mb-2 h-4 w-4 text-slate-400" /><p className="text-xl font-extrabold text-slate-800">{value.toLocaleString()}</p><p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p></div>)}
-          </div>
-        </div>
       </div>
     </div>
   );

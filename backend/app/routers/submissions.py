@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.db.models import ActivityLog, Submission, SubmissionStatus, UserProfile, UserRole
+from app.db.models import ActivityLog, CatalogAsset, Submission, SubmissionStatus, UserProfile, UserRole
 from app.deps.rbac import get_current_user, require_role
 from app.schemas.submission import (
     SubmissionCreate,
@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
 
 
-def _to_response(s: Submission) -> SubmissionResponse:
+def _to_response(s: Submission, catalog_asset_id: str | None = None) -> SubmissionResponse:
     return SubmissionResponse(
         id=s.id,
+        catalog_asset_id=catalog_asset_id or s.catalog_code,
         title=s.title,
         description=s.description,
         family=s.family,
@@ -54,6 +55,8 @@ def _to_response(s: Submission) -> SubmissionResponse:
         collaborators=s.collaborators,
         dependencies=s.dependencies,
         commands=s.commands,
+        aiv_ideation_id=s.aiv_ideation_id,
+        aiv_ideation_title=s.aiv_ideation_title,
     )
 
 
@@ -66,6 +69,23 @@ async def create_submission(
 ) -> SubmissionResponse:
     from app.services.email_service import send_submission_received_email, send_submission_admin_notification_email
     from app.services.orchestrator import run_scoring_pipeline
+    from app.services.aiv_ideation_service import require_approved_ideation
+
+    ideation_id = body.aiv_ideation_id.strip() if body.aiv_ideation_id else ""
+    ideation: dict | None = None
+    if ideation_id:
+        ideation = await require_approved_ideation(ideation_id)
+    elif body.catalog_asset_id:
+        existing_asset = (await db.execute(
+            select(CatalogAsset).where(CatalogAsset.id == body.catalog_asset_id)
+        )).scalars().first()
+        if existing_asset and existing_asset.aiv_ideation_id:
+            ideation = {
+                "id": existing_asset.aiv_ideation_id,
+                "title": existing_asset.aiv_ideation_title,
+            }
+    else:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="AIV Ideation is required for a new asset.")
 
     submission = Submission(
         title=body.title,
@@ -91,6 +111,8 @@ async def create_submission(
         dependencies=body.dependencies,
         commands=body.commands or [],
         catalog_code=body.catalog_asset_id,
+        aiv_ideation_id=ideation["id"] if ideation else None,
+        aiv_ideation_title=ideation["title"] if ideation else None,
         status=SubmissionStatus.Submitted,
         submitter_id=user.id,
     )
@@ -102,6 +124,18 @@ async def create_submission(
     ))
     await db.flush()
     await db.refresh(submission)
+
+    # Bell notification for the L1 review audience.
+    from app.services.notification_service import push_notifications_to_roles
+    await push_notifications_to_roles(
+        db,
+        [UserRole.admin, UserRole.owner],
+        "New Asset Submission",
+        f'"{submission.title}" was submitted by {user.display_name or user.email} and is entering AI evaluation.',
+        "submission_created",
+        str(submission.id),
+        exclude_user_id=str(user.id),
+    )
 
     submission_data = {
         "id": str(submission.id),
@@ -243,7 +277,34 @@ async def get_all_submissions(
     result = await db.execute(
         stmt.order_by(Submission.created_at.desc()).offset(skip).limit(limit)
     )
-    return SubmissionListResponse(items=[_to_response(s) for s in result.scalars().all()], total=count)
+    submissions = list(result.scalars().all())
+
+    # Resolve every revision to its logical catalog asset. Newer edit submissions
+    # carry catalog_code directly; older published rows are recovered from the
+    # publication audit log or, for legacy rows, from title + owner.
+    publication_logs = (await db.execute(
+        select(ActivityLog).where(ActivityLog.action == "submission_published")
+    )).scalars().all()
+    published_asset_by_submission = {
+        str(log.entity_id): str((log.log_metadata or {}).get("catalog_asset_id"))
+        for log in publication_logs
+        if log.entity_id and (log.log_metadata or {}).get("catalog_asset_id") not in (None, "", "None")
+    }
+    catalog_assets = list((await db.execute(select(CatalogAsset))).scalars().all())
+    legacy_asset_by_identity = {
+        ((asset.title or "").strip().lower(), str(asset.owner_id)): str(asset.id)
+        for asset in catalog_assets
+    }
+
+    items = []
+    for submission in submissions:
+        asset_id = (
+            submission.catalog_code
+            or published_asset_by_submission.get(str(submission.id))
+            or legacy_asset_by_identity.get(((submission.title or "").strip().lower(), str(submission.submitter_id)))
+        )
+        items.append(_to_response(submission, asset_id))
+    return SubmissionListResponse(items=items, total=count)
 
 
 @router.get("/{submission_id}", response_model=SubmissionResponse)
@@ -288,6 +349,12 @@ async def update_submission(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot edit submission with status '{sub.status}'.")
 
     update_data = body.model_dump(exclude_unset=True)
+    ideation_id = update_data.pop("aiv_ideation_id", None) or sub.aiv_ideation_id
+    from app.services.aiv_ideation_service import require_approved_ideation
+    if ideation_id:
+        ideation = await require_approved_ideation(ideation_id)
+        sub.aiv_ideation_id = ideation["id"]
+        sub.aiv_ideation_title = ideation["title"]
     if "video_urls" in update_data:
         update_data["video_urls"] = list(dict.fromkeys(update_data["video_urls"] or []))
         update_data["video_url"] = update_data["video_urls"][0] if update_data["video_urls"] else None
@@ -476,6 +543,8 @@ async def publish_submission(
         existing_asset.manager_name = sub.manager_name
         existing_asset.manager_email = sub.manager_email
         existing_asset.designation = sub.designation
+        existing_asset.aiv_ideation_id = sub.aiv_ideation_id
+        existing_asset.aiv_ideation_title = sub.aiv_ideation_title
         existing_asset.ai_score = sub.ai_score
         existing_asset.ai_feedback = sub.ai_feedback
         existing_asset.status = AssetStatus.Published
@@ -507,6 +576,8 @@ async def publish_submission(
             manager_name=sub.manager_name,
             manager_email=sub.manager_email,
             designation=sub.designation,
+            aiv_ideation_id=sub.aiv_ideation_id,
+            aiv_ideation_title=sub.aiv_ideation_title,
             status=AssetStatus.Published,
             ai_score=sub.ai_score,
             ai_feedback=sub.ai_feedback,
@@ -514,6 +585,8 @@ async def publish_submission(
         )
         db.add(asset)
 
+    await db.flush()
+    sub.catalog_code = str(asset.id)
     sub.status = SubmissionStatus.Published
     db.add(ActivityLog(
         actor_id=user.id,

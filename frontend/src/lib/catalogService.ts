@@ -1,6 +1,8 @@
 import { apiClient } from './apiClient';
 
 export interface CatalogAsset {
+  aiv_ideation_id: string | null;
+  aiv_ideation_title: string | null;
   id: string;
   catalog_code: string;
   slug: string;

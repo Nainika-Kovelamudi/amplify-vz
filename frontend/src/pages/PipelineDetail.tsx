@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   AlertTriangle, Check, ExternalLink, FileCode2, GitBranch,
   Layers, Pencil, Play, Trash2, X, Brain, ClipboardList, Info,
   CheckCircle2, XCircle, Clock, Rocket, Building2, Cloud,
   Calendar, Hash, Cpu, BookOpen, BarChart2, ChevronRight,
-  Shield, Zap, Star, Download, MessageSquare, Send, Package, Terminal, RotateCcw,
+  Shield, Zap, Star, Download, MessageSquare, Send, Package, Terminal, RotateCcw, User,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { defaultFamilyBadge, useFamilies } from '../context/FamiliesContext';
@@ -14,7 +14,7 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { DemoVideoModal } from '../components/media/DemoVideoModal';
 import { getSubmission, deleteSubmission, publishSubmission, retrySubmissionAIScore, type Submission } from '../lib/submissionService';
-import { approveSubmission, rejectSubmission, finalRejectSubmission, holdSubmission } from '../lib/adminService';
+import { approveSubmission, rejectSubmission, finalRejectSubmission, holdSubmission, assignSubmissionReview } from '../lib/adminService';
 import { getComments, addComment, type SubmissionComment } from '../lib/commentService';
 
 // ── types ──────────────────────────────────────────────────────────────────────
@@ -197,24 +197,32 @@ function formatDate(iso: string) {
 export function PipelineDetail() {
   const { id }       = useParams();
   const navigate     = useNavigate();
+  const location     = useLocation();
   const { user }     = useAuth();
   const { families } = useFamilies();
 
   const [submission,        setSubmission]        = useState<Submission | null>(null);
   const [isLoading,         setIsLoading]         = useState(true);
-  const [activeTab,         setActiveTab]         = useState<TabId>('overview');
+  const [activeTab,         setActiveTab]         = useState<TabId>(() => {
+    const stateTab = (location.state as { tab?: string } | null)?.tab;
+    const legacyTab = new URLSearchParams(location.search).get('tab');
+    const requestedTab = stateTab || (location.hash === '#comments' ? 'comments' : legacyTab);
+    return requestedTab === 'artifacts' || requestedTab === 'ai' || requestedTab === 'comments'
+      ? requestedTab
+      : 'overview';
+  });
   const [demoVideoOpen,     setDemoVideoOpen]     = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [isDeleting,        setIsDeleting]        = useState(false);
   const [deleteError,       setDeleteError]       = useState('');
   const [rejectionNotes,    setRejectionNotes]    = useState('');
-  const [holdNotes,         setHoldNotes]         = useState('');
   const [actionLoading,     setActionLoading]     = useState<'approve' | 'reject' | 'final-reject' | 'hold' | 'publish' | 'rescore' | null>(null);
   const [actionError,       setActionError]       = useState('');
   const [decisionBanner,    setDecisionBanner]    = useState<{ type: 'approved' | 'rejected' | 'final-rejected' | 'on-hold' | 'published'; title: string } | null>(null);
   const [comments,          setComments]          = useState<SubmissionComment[]>([]);
   const [commentDraft,      setCommentDraft]      = useState('');
   const [commentSending,    setCommentSending]    = useState(false);
+  const [assigningReview,   setAssigningReview]   = useState(false);
 
   const role    = user?.role ?? 'guest';
   const isOwner = role === 'Aimplify.Owner';
@@ -223,6 +231,23 @@ export function PipelineDetail() {
   const pollingScore = submission?.ai_score;
 
   useEffect(() => { window.scrollTo(0, 0); }, [id]);
+
+  useEffect(() => {
+    const stateTab = (location.state as { tab?: string } | null)?.tab;
+    const legacyTab = new URLSearchParams(location.search).get('tab');
+    const requestedTab = stateTab || (location.hash === '#comments' ? 'comments' : legacyTab);
+    if (requestedTab === 'overview' || requestedTab === 'artifacts' || requestedTab === 'ai' || requestedTab === 'comments') {
+      setActiveTab(requestedTab);
+    }
+  }, [location.hash, location.search, location.state]);
+
+  useEffect(() => {
+    if (activeTab !== 'comments' || !submission) return;
+    const scrollTimer = window.setTimeout(() => {
+      document.getElementById('submission-comments')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+    return () => window.clearTimeout(scrollTimer);
+  }, [activeTab, submission]);
 
   useEffect(() => {
     if (!id) { setIsLoading(false); return; }
@@ -262,6 +287,22 @@ export function PipelineDetail() {
       setCommentDraft('');
     } catch { /* ignore */ }
     finally { setCommentSending(false); }
+  };
+
+  const handleAssignReview = async () => {
+    if (!id || !submission) return;
+    const email = prompt(`Assign "${submission.title}" for approval.\n\nEnter the reviewer's platform email address:`)?.trim();
+    if (!email) return;
+    setAssigningReview(true);
+    setActionError('');
+    try {
+      const updated = await assignSubmissionReview(id, email);
+      setSubmission(updated);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Assignment failed.');
+    } finally {
+      setAssigningReview(false);
+    }
   };
 
   if (isLoading) return <div className="py-24 text-center text-sm font-medium text-gray-400">Loading submission…</div>;
@@ -317,11 +358,13 @@ export function PipelineDetail() {
     if (!id || !submission) return;
     setActionLoading('approve'); setActionError('');
     try {
-      const updated = await approveSubmission(id);
+      const notes = rejectionNotes.trim();
+      const updated = await approveSubmission(id, notes || undefined);
       setSubmission(s => s ? { ...s, status: updated.status } : s);
       setDecisionBanner({ type: 'approved', title: submission.title });
       // Post approval as a comment so all admins/owners can see it
-      try { const c = await addComment(id, `✅ Approved (L1) — moved to Owner publish queue.`); setComments(prev => [...prev, c]); } catch {}
+      try { const c = await addComment(id, `✅ Approved (L1) — moved to Owner publish queue.${notes ? `\n${notes}` : ''}`); setComments(prev => [...prev, c]); } catch {}
+      setRejectionNotes('');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Approve failed.');
     } finally { setActionLoading(null); }
@@ -363,14 +406,15 @@ export function PipelineDetail() {
     if (!id || !submission) return;
     setActionLoading('hold'); setActionError('');
     try {
-      const updated = await holdSubmission(id, holdNotes.trim() || undefined);
+      const notes = rejectionNotes.trim();
+      const updated = await holdSubmission(id, notes || undefined);
       setSubmission(s => s ? { ...s, status: updated.status } : s);
       setDecisionBanner({ type: 'on-hold', title: submission.title });
       // Post hold note as a comment so all admins/owners can see it
-      if (holdNotes.trim()) {
-        try { const c = await addComment(id, `⏸ Placed on hold:\n${holdNotes.trim()}`); setComments(prev => [...prev, c]); } catch {}
+      if (notes) {
+        try { const c = await addComment(id, `⏸ Placed on hold:\n${notes}`); setComments(prev => [...prev, c]); } catch {}
       }
-      setHoldNotes('');
+      setRejectionNotes('');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Hold failed.');
     } finally { setActionLoading(null); }
@@ -383,6 +427,10 @@ export function PipelineDetail() {
       const updated = await publishSubmission(id);
       setSubmission(s => s ? { ...s, status: updated.status } : s);
       setDecisionBanner({ type: 'published', title: submission.title });
+      if (rejectionNotes.trim()) {
+        try { const c = await addComment(id, `🚀 Published to catalog:\n${rejectionNotes.trim()}`); setComments(prev => [...prev, c]); } catch {}
+      }
+      setRejectionNotes('');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Publish failed.');
     } finally { setActionLoading(null); }
@@ -934,7 +982,7 @@ export function PipelineDetail() {
 
               {/* ── Comments tab ── */}
               {activeTab === 'comments' && (
-                <div className="flex flex-col gap-4">
+                <div id="submission-comments" className="scroll-mt-24 flex flex-col gap-4">
                   <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-2.5 text-xs text-amber-700 font-medium flex items-center gap-2">
                     <Shield className="h-3.5 w-3.5 shrink-0" />
                     Visible to all Admins, Owners, and the submitter. Approval decisions are auto-posted here.
@@ -950,18 +998,19 @@ export function PipelineDetail() {
                     )}
                     {comments.map(c => {
                       const isMe = c.author_id === user?.id;
+                      const authorLabel = c.author_name || c.author_email || 'System';
                       return (
                         <div key={c.id} className={`flex gap-3 ${isMe ? 'flex-row-reverse' : ''}`}>
                           <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${isMe ? 'bg-violet-500' : 'bg-sky-500'}`}>
-                            {(c.author_name || c.author_email).slice(0, 2).toUpperCase()}
+                            {authorLabel.slice(0, 2).toUpperCase()}
                           </div>
                           <div className={`max-w-[75%] ${isMe ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
                             <div className={`flex items-center gap-2 text-[10px] text-gray-400 ${isMe ? 'flex-row-reverse' : ''}`}>
-                              <span className="font-semibold text-gray-600">{c.author_name || c.author_email}</span>
-                              <span>{new Date(c.created_at).toLocaleString()}</span>
+                              <span className="font-semibold text-gray-600">{authorLabel}</span>
+                              <span>{c.created_at ? new Date(c.created_at).toLocaleString() : ''}</span>
                             </div>
                             <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${isMe ? 'rounded-tr-sm bg-violet-500 text-white' : 'rounded-tl-sm bg-gray-100 text-gray-800'}`}>
-                              {c.body}
+                              {c.body || ''}
                             </div>
                           </div>
                         </div>
@@ -1085,14 +1134,21 @@ export function PipelineDetail() {
                     <p className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{actionError}</p>
                   )}
                   <textarea value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)}
-                    placeholder="Notes — required for Reject / Request Changes / Final Reject…"
+                    placeholder="Final comments for this approval decision…"
                     rows={3}
-                    className="mb-2 w-full rounded-lg border border-amber-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
-                  <textarea value={holdNotes} onChange={e => setHoldNotes(e.target.value)}
-                    placeholder="On-hold reason (optional)…"
-                    rows={2}
                     className="mb-4 w-full rounded-lg border border-amber-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
                   <div className="flex flex-wrap gap-3">
+                    {isAdmin && (
+                      <Button variant="outline" className="gap-2 border-violet-300 text-violet-700 hover:bg-violet-50"
+                        disabled={assigningReview || actionLoading !== null}
+                        onClick={() => void handleAssignReview()}>
+                        <User className="h-4 w-4" />{assigningReview ? 'Assigning…' : 'Assign'}
+                      </Button>
+                    )}
+                    <Button variant="outline" className="gap-2 border-sky-300 text-sky-700 hover:bg-sky-50"
+                      onClick={() => setActiveTab('comments')}>
+                      <MessageSquare className="h-4 w-4" />Message
+                    </Button>
                     <Button variant="outline" className="gap-2 border-rose-300 text-rose-700 hover:bg-rose-50"
                       disabled={!rejectionNotes.trim() || actionLoading !== null}
                       onClick={() => void handleReject()}>
@@ -1138,14 +1194,14 @@ export function PipelineDetail() {
                     <p className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{actionError}</p>
                   )}
                   <textarea value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)}
-                    placeholder="Notes — required for Return for Revision or Reject…"
+                    placeholder="Final comments for this publishing decision…"
                     rows={3}
-                    className="mb-2 w-full rounded-lg border border-emerald-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
-                  <textarea value={holdNotes} onChange={e => setHoldNotes(e.target.value)}
-                    placeholder="On-hold reason (optional)…"
-                    rows={2}
                     className="mb-4 w-full rounded-lg border border-emerald-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
                   <div className="flex flex-wrap gap-3">
+                    <Button variant="outline" className="gap-2 border-sky-300 text-sky-700 hover:bg-sky-50"
+                      onClick={() => setActiveTab('comments')}>
+                      <MessageSquare className="h-4 w-4" />Message
+                    </Button>
                     <Button variant="outline" className="gap-2 border-rose-300 text-rose-700 hover:bg-rose-50"
                       disabled={!rejectionNotes.trim() || actionLoading !== null}
                       onClick={() => void handleReject()}>

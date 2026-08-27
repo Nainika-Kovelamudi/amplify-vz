@@ -8,11 +8,16 @@ class AdminStatsResponse(BaseModel):
     awaiting_publish: int    # Approved — awaiting owner to publish
     published_assets: int
     pending_clones: int
+    pending_demos: int
     total_users: int
 
 
 class ApprovalActionRequest(BaseModel):
     notes: Optional[str] = None
+
+
+class ApprovalAssignmentRequest(BaseModel):
+    email: str
 
 
 class ExecutiveSummary(BaseModel):

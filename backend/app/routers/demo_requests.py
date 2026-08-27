@@ -9,9 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.db.models import AssetStatus, CatalogAsset, DemoRequest, UserProfile, UserRole
+from app.db.models import ActivityLog, AssetStatus, CatalogAsset, DemoRequest, UserProfile, UserRole
 from app.deps.rbac import get_current_user, require_role
-from app.schemas.demo_request import DemoRequestCreate, DemoRequestResponse
+from app.schemas.demo_request import DemoRequestCreate, DemoRequestDecision, DemoRequestResponse
+from app.services.notification_service import push_notification, push_notifications_to_roles
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Demo Requests"])
@@ -29,6 +30,12 @@ def _to_response(dr: DemoRequest) -> DemoRequestResponse:
         requester_email=requester.email if requester else None,
         customer_name=dr.customer_name,
         project_name=dr.project_name,
+        vertical=dr.vertical,
+        additional_details=dr.additional_details,
+        status=dr.status,
+        decision_notes=dr.decision_notes,
+        reviewed_by=dr.reviewed_by,
+        reviewed_at=dr.reviewed_at,
         requested_at=dr.requested_at,
     )
 
@@ -55,6 +62,9 @@ async def create_demo_request(
         requester_id=user.id,
         customer_name=body.customer_name.strip(),
         project_name=body.project_name.strip(),
+        vertical=body.vertical.strip() if body.vertical else None,
+        additional_details=body.additional_details.strip() if body.additional_details else None,
+        status="Pending",
         requested_at=datetime.now(timezone.utc),
     )
     db.add(dr)
@@ -65,6 +75,30 @@ async def create_demo_request(
 
     await db.commit()
     await db.refresh(dr)
+
+    await push_notifications_to_roles(
+        db,
+        [UserRole.admin, UserRole.owner],
+        "New Demo Request",
+        f'"{asset.title}" was requested for {dr.customer_name} / {dr.project_name}.',
+        "demo_request_created",
+        str(dr.id),
+        exclude_user_id=str(user.id),
+    )
+    # A standard user who owns this asset is also part of its review audience.
+    if asset.owner_id and str(asset.owner_id) != str(user.id):
+        asset_owner = (await db.execute(select(UserProfile).where(UserProfile.id == asset.owner_id))).scalars().first()
+        owner_role = asset_owner.role.value if asset_owner and hasattr(asset_owner.role, "value") else (asset_owner.role if asset_owner else None)
+        if asset_owner and owner_role not in ("Aimplify.Admin", "Aimplify.Owner"):
+            await push_notification(
+                db,
+                str(asset_owner.id),
+                "New Demo Request",
+                f'"{asset.title}" was requested for {dr.customer_name} / {dr.project_name}.',
+                "demo_request_created",
+                str(dr.id),
+            )
+    await db.commit()
 
     # Send notification email in background
     background_tasks.add_task(
@@ -87,6 +121,12 @@ async def create_demo_request(
         requester_email=user.email,
         customer_name=dr.customer_name,
         project_name=dr.project_name,
+        vertical=dr.vertical,
+        additional_details=dr.additional_details,
+        status=dr.status,
+        decision_notes=dr.decision_notes,
+        reviewed_by=dr.reviewed_by,
+        reviewed_at=dr.reviewed_at,
         requested_at=dr.requested_at,
     )
 
@@ -117,6 +157,12 @@ async def get_my_demo_requests(
             requester_email=user.email,
             customer_name=dr.customer_name,
             project_name=dr.project_name,
+            vertical=dr.vertical,
+            additional_details=dr.additional_details,
+            status=dr.status,
+            decision_notes=dr.decision_notes,
+            reviewed_by=dr.reviewed_by,
+            reviewed_at=dr.reviewed_at,
             requested_at=dr.requested_at,
         ))
     return out
@@ -158,6 +204,12 @@ async def get_demo_requests_for_asset(
             requester_email=requester.email if requester else None,
             customer_name=dr.customer_name,
             project_name=dr.project_name,
+            vertical=dr.vertical,
+            additional_details=dr.additional_details,
+            status=dr.status,
+            decision_notes=dr.decision_notes,
+            reviewed_by=dr.reviewed_by,
+            reviewed_at=dr.reviewed_at,
             requested_at=dr.requested_at,
         ))
     return out
@@ -166,11 +218,16 @@ async def get_demo_requests_for_asset(
 @router.get("/demo-requests", response_model=list[DemoRequestResponse])
 async def get_all_demo_requests(
     db: AsyncSession = Depends(get_db),
-    user: UserProfile = require_role("Aimplify.Admin", "Aimplify.Owner"),
+    user: UserProfile = Depends(get_current_user),
 ) -> list[DemoRequestResponse]:
-    result = await db.execute(
-        select(DemoRequest).order_by(DemoRequest.requested_at.desc())
-    )
+    role = user.role.value if hasattr(user.role, "value") else user.role
+    stmt = select(DemoRequest)
+    if role not in ("Aimplify.Admin", "Aimplify.Owner"):
+        # Asset owners may review requests only for assets they own.
+        stmt = stmt.join(CatalogAsset, CatalogAsset.id == DemoRequest.asset_id).where(
+            CatalogAsset.owner_id == user.id
+        )
+    result = await db.execute(stmt.order_by(DemoRequest.requested_at.desc()))
     rows = result.scalars().all()
 
     out: list[DemoRequestResponse] = []
@@ -188,9 +245,132 @@ async def get_all_demo_requests(
             requester_email=requester.email if requester else None,
             customer_name=dr.customer_name,
             project_name=dr.project_name,
+            vertical=dr.vertical,
+            additional_details=dr.additional_details,
+            status=dr.status,
+            decision_notes=dr.decision_notes,
+            reviewed_by=dr.reviewed_by,
+            reviewed_at=dr.reviewed_at,
             requested_at=dr.requested_at,
         ))
     return out
+
+
+async def _decide_demo_request(
+    request_id: _uuid.UUID,
+    decision: str,
+    body: DemoRequestDecision,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession,
+    user: UserProfile,
+) -> DemoRequestResponse:
+    result = await db.execute(select(DemoRequest).where(DemoRequest.id == request_id))
+    dr = result.scalars().first()
+    if not dr:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demo request not found.")
+    if dr.status != "Pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Demo request is already {dr.status.lower()}.")
+
+    asset = (await db.execute(select(CatalogAsset).where(CatalogAsset.id == dr.asset_id))).scalars().first()
+    requester = (await db.execute(select(UserProfile).where(UserProfile.id == dr.requester_id))).scalars().first()
+    role = user.role.value if hasattr(user.role, "value") else user.role
+    is_platform_reviewer = role in ("Aimplify.Admin", "Aimplify.Owner")
+    is_asset_owner = bool(asset and str(asset.owner_id) == str(user.id))
+    if not is_platform_reviewer and not is_asset_owner:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the asset owner, an Admin, or an Owner can decide this request.")
+    dr.status = decision
+    dr.decision_notes = body.notes.strip() if body.notes else None
+    dr.reviewed_by = user.id
+    dr.reviewed_at = datetime.now(timezone.utc)
+    db.add(ActivityLog(
+        actor_id=user.id,
+        action=f"demo_request_{decision.lower()}",
+        entity_type="demo_request",
+        entity_id=dr.id,
+        log_metadata={"notes": dr.decision_notes, "asset_id": str(dr.asset_id)},
+    ))
+    await db.commit()
+    await db.refresh(dr)
+
+    if requester:
+        await push_notification(
+            db,
+            str(requester.id),
+            f"Demo Request {decision}",
+            f'Your demo request for "{asset.title if asset else dr.asset_id}" was {decision.lower()}.',
+            f"demo_request_{decision.lower()}",
+            str(dr.id),
+        )
+        await db.commit()
+        background_tasks.add_task(
+            _notify_demo_decision,
+            requester.email,
+            asset.title if asset else str(dr.asset_id),
+            decision,
+            dr.decision_notes,
+        )
+
+    return DemoRequestResponse(
+        id=dr.id, asset_id=dr.asset_id,
+        asset_title=asset.title if asset else None,
+        asset_slug=asset.slug if asset else None,
+        requester_name=requester.display_name if requester else None,
+        requester_email=requester.email if requester else None,
+        customer_name=dr.customer_name, project_name=dr.project_name,
+        vertical=dr.vertical, additional_details=dr.additional_details,
+        status=dr.status, decision_notes=dr.decision_notes,
+        reviewed_by=dr.reviewed_by, reviewed_at=dr.reviewed_at,
+        requested_at=dr.requested_at,
+    )
+
+
+@router.patch("/demo-requests/{request_id}/approve", response_model=DemoRequestResponse)
+async def approve_demo_request(
+    request_id: _uuid.UUID,
+    body: DemoRequestDecision,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: UserProfile = Depends(get_current_user),
+) -> DemoRequestResponse:
+    return await _decide_demo_request(request_id, "Approved", body, background_tasks, db, user)
+
+
+@router.patch("/demo-requests/{request_id}/reject", response_model=DemoRequestResponse)
+async def reject_demo_request(
+    request_id: _uuid.UUID,
+    body: DemoRequestDecision,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: UserProfile = Depends(get_current_user),
+) -> DemoRequestResponse:
+    return await _decide_demo_request(request_id, "Rejected", body, background_tasks, db, user)
+
+
+async def _notify_demo_decision(
+    requester_email: str,
+    asset_title: str,
+    decision: str,
+    notes: str | None,
+) -> None:
+    from app.services.email_service import _send, _wrap
+
+    color = "#059669" if decision == "Approved" else "#DC2626"
+    notes_html = f"<p><strong>Decision notes:</strong> {notes}</p>" if notes else ""
+    body_html = f"""
+    <tr><td style="padding:32px 40px;font-family:Arial,sans-serif;color:#374151;line-height:1.6;">
+      <h2 style="margin:0 0 16px;color:#111827;">Demo Request {decision}</h2>
+      <p>Your demo request for <strong>{asset_title}</strong> was <strong>{decision.lower()}</strong>.</p>
+      {notes_html}
+    </td></tr>
+    """
+    try:
+        await _send(
+            requester_email,
+            f"[Amplify] Demo Request {decision} — {asset_title}",
+            _wrap(color, "DEMO REQUEST", body_html),
+        )
+    except Exception as exc:
+        logger.warning("Failed to send demo decision notification to %s: %s", requester_email, exc)
 
 
 async def _notify_demo_request(

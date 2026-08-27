@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Search, UserCog, Check, X, Lock, Unlock, Trash2 } from 'lucide-react';
+import { Search, UserCog, Check, X, Lock, Unlock, Trash2, Download, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { getUsers, updateUserRole, deleteUser, type AppUser } from '../lib/adminService';
 
@@ -52,6 +52,7 @@ export function AdminUsers() {
   const [deleteError, setDeleteError] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [downloading, setDownloading] = useState(false);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -71,6 +72,54 @@ export function AdminUsers() {
   }, [authLoading, fetchUsers]);
 
   const notify = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(''), 3000); };
+
+  const handleDownload = async () => {
+    setDownloading(true); setError('');
+    try {
+      const filters = {
+        search: search || undefined,
+        role: roleFilter || undefined,
+        department: deptFilter || undefined,
+      };
+      const first = await getUsers({ ...filters, limit: 200 });
+      const rows = [...first.items];
+      for (let skip = rows.length; skip < first.total; skip += 200) {
+        const page = await getUsers({ ...filters, skip, limit: 200 });
+        rows.push(...page.items);
+      }
+
+      const cell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const roleLabel = (role: string) => ROLES.find(item => item.value === role)?.label ?? role;
+      const csvRows = rows.map(u => [
+        u.id,
+        u.display_name,
+        u.email,
+        roleLabel(u.role),
+        u.department,
+        u.role_locked ? 'Pinned' : 'Azure AD',
+        u.last_login,
+        u.created_at,
+      ]);
+      const csv = [
+        ['User ID', 'Name', 'Email', 'Role', 'Department', 'Role Source', 'Last Login', 'Created At'],
+        ...csvRows,
+      ].map(row => row.map(cell).join(',')).join('\r\n');
+      const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `aimplify-users-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      notify(`${rows.length} users exported successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to download users.');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!editState) return;
@@ -127,6 +176,14 @@ export function AdminUsers() {
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">User Management</h1>
           <p className="mt-1 text-sm text-gray-500">{total} users · owner access only</p>
         </div>
+        <button
+          onClick={() => void handleDownload()}
+          disabled={downloading}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {downloading ? 'Generating...' : 'Download'}
+        </button>
       </div>
 
       {/* Filters */}

@@ -32,6 +32,7 @@ from app.routers import (
     demo_requests,
     feedback,
     likes,
+    integrations,
     media,
     notifications,
     submissions,
@@ -50,11 +51,41 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     await load_secrets(settings)
-    get_settings.cache_clear()
 
-    get_engine()  # initialise connection pool at startup
+    engine = get_engine()  # initialise connection pool at startup
+    # Azure App Service can be configured with a custom startup command that
+    # bypasses startup.sh. Keep this small, idempotent guard so deployments
+    # cannot run new AIV-mapping models against an older database schema.
+    from sqlalchemy import text
+    async with engine.begin() as connection:
+        await connection.execute(text(
+            "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS aiv_ideation_id VARCHAR"
+        ))
+        await connection.execute(text(
+            "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS aiv_ideation_title VARCHAR"
+        ))
+        await connection.execute(text(
+            "ALTER TABLE catalog_assets ADD COLUMN IF NOT EXISTS aiv_ideation_id VARCHAR"
+        ))
+        await connection.execute(text(
+            "ALTER TABLE catalog_assets ADD COLUMN IF NOT EXISTS aiv_ideation_title VARCHAR"
+        ))
+        await connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_submissions_aiv_ideation_id ON submissions (aiv_ideation_id)"
+        ))
+        await connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_catalog_assets_aiv_ideation_id ON catalog_assets (aiv_ideation_id)"
+        ))
+    logger.info("AIV ideation mapping schema verified.")
+    from app.services.executive_report_service import run_executive_report_scheduler
+    report_scheduler_task = asyncio.create_task(run_executive_report_scheduler())
     logger.info("Amplify API started — debug=%s", settings.debug)
     yield
+    report_scheduler_task.cancel()
+    try:
+        await report_scheduler_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Amplify API shutting down.")
 
 
@@ -81,6 +112,12 @@ def create_app() -> FastAPI:
         _cors_list = [o.strip() for o in _raw.split(",") if o.strip()]
 
     default_origins = {settings.frontend_url} if settings.frontend_url else set()
+    # Canonical AIMPLIFY frontends must remain allowed even when an Azure slot
+    # still carries an older Static Web Apps hostname in FRONTEND_URL/CORS_ORIGINS.
+    default_origins.update({
+        "https://aimplify.infovision.ai",
+        "https://aimplify-dev.infovision.ai",
+    })
     origins = list(set(_cors_list) | default_origins)
     # Always allow localhost variants — the backend never runs on port 8000 in production
     # (Azure App Service terminates externally), so this is safe unconditionally.
@@ -132,6 +169,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(media.router)
     app.include_router(notifications.router)
+    app.include_router(integrations.router)
 
     app.add_api_websocket_route("/ws/notifications", websocket_notifications_endpoint)
 

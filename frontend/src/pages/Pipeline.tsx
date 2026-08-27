@@ -3,11 +3,11 @@ import type { MouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  ArrowRight, Plus, ChevronDown, ChevronUp,
+  ArrowRight, ChevronDown, ChevronUp,
   CheckCircle2, XCircle, AlertCircle, Clock, Loader2, Rocket, AlertTriangle,
   Trash2, Crown, GitBranch, X,
   FileText, BrainCircuit, ShieldCheck, BadgeCheck, Filter,
-  User, ClipboardList, LayoutGrid,
+  User, ClipboardList, LayoutGrid, Download, MessageSquare,
 } from 'lucide-react';
 
 // ── Toast notification ────────────────────────────────────────────────────────
@@ -56,9 +56,9 @@ import {
   getMySubmissions, getAllSubmissions, publishSubmission, deleteSubmission,
   type Submission,
 } from '../lib/submissionService';
-import { getPendingApprovals, getPublishQueue, approveSubmission, rejectSubmission, finalRejectSubmission, holdSubmission } from '../lib/adminService';
+import { getPendingApprovals, getPublishQueue, getMyReviewQueue, assignSubmissionReview, approveSubmission, rejectSubmission, finalRejectSubmission, holdSubmission } from '../lib/adminService';
 import { getIncomingCloneRequests, getMyCloneRequests, getAllCloneRequests, approveClone, denyClone, cancelClone, type CloneRequest } from '../lib/cloneService';
-import { getMyDemoRequests, getAllDemoRequests, type DemoRequest } from '../lib/demoRequestService';
+import { getMyDemoRequests, getAllDemoRequests, approveDemoRequest, rejectDemoRequest, type DemoRequest } from '../lib/demoRequestService';
 import { useAuth } from '../context/AuthContext';
 
 // ── Workflow progress tracker ─────────────────────────────────────────────────
@@ -319,12 +319,13 @@ interface CardProps {
   actionLoading: string | null;
   index: number;
   showSubmitter?: boolean;
+  onAssign?: (id: string, title: string) => void;
 }
 
 function SubmissionCard({
   sub, role, userId,
   onApprove, onReject, onFinalReject, onHold, onPublish, onDelete,
-  actionLoading, index, showSubmitter,
+  actionLoading, index, showSubmitter, onAssign,
 }: CardProps) {
   const navigate = useNavigate();
   const { families } = useFamilies();
@@ -337,7 +338,8 @@ function SubmissionCard({
   const isAdmin = role === 'Aimplify.Admin' || role === 'Aimplify.Owner';
   const isMySubmission = userId === sub.submitter_id;
 
-  const canAdminAction = isAdmin && (sub.status === 'Manual_Approval' || (isOwner && sub.status === 'Needs_Changes'));
+  const isAssignedReviewer = !!userId && sub.assigned_reviewer_id === userId;
+  const canAdminAction = (isAdmin || isAssignedReviewer) && (sub.status === 'Manual_Approval' || (isOwner && sub.status === 'Needs_Changes'));
   // Only Owner (super_admin) can publish — no one else
   const canPublish = (sub.status === 'Approved' || sub.status === 'On_Hold') && isOwner;
   // Owner can delete any; submitter can delete their own non-published
@@ -512,6 +514,17 @@ function SubmissionCard({
                 className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs outline-none focus:border-amber-300 focus:ring-1 focus:ring-amber-100"
               />
               <div className="flex gap-2">
+                {onAssign && isAdmin && (
+                  <Button size="sm" variant="outline" className="gap-1 border-violet-300 text-violet-700 hover:bg-violet-50"
+                    disabled={isActing} onClick={() => onAssign(sub.id, sub.title)}>
+                    <User className="h-3 w-3" />Assign
+                  </Button>
+                )}
+                <Button size="sm" variant="outline"
+                  className="gap-1 border-sky-300 text-sky-700 hover:bg-sky-50"
+                  onClick={() => navigate(`/pipeline/${sub.id}#comments`, { state: { tab: 'comments' } })}>
+                  <MessageSquare className="h-3 w-3" />Message
+                </Button>
                 <Button size="sm" variant="outline"
                   disabled={!adminNote.trim() || isActing}
                   onClick={(e) => void onReject(e as MouseEvent, sub.id, adminNote, sub.title)}>
@@ -585,6 +598,19 @@ function SubmissionCard({
 
 type GroupTab = 'my-work' | 'review' | 'all-activity';
 
+function latestLogicalSubmissions(submissions: Submission[]): Submission[] {
+  const latestByAsset = new Map<string, Submission>();
+  for (const submission of submissions) {
+    const logicalKey = submission.catalog_asset_id || submission.id;
+    const existing = latestByAsset.get(logicalKey);
+    const submissionTime = new Date(submission.updated_at || submission.created_at).getTime();
+    const existingTime = existing ? new Date(existing.updated_at || existing.created_at).getTime() : -1;
+    if (!existing || submissionTime > existingTime) latestByAsset.set(logicalKey, submission);
+  }
+  return [...latestByAsset.values()].sort((a, b) =>
+    new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
+}
+
 export function Pipeline() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -598,6 +624,7 @@ export function Pipeline() {
   const [allSubmissions, setAllSubmissions] = useState<Submission[]>([]);
   const [pendingQueue, setPendingQueue] = useState<Submission[]>([]);
   const [publishQueue, setPublishQueue] = useState<Submission[]>([]);
+  const [assignedReviewQueue, setAssignedReviewQueue] = useState<Submission[]>([]);
   const [cloneRequests, setCloneRequests] = useState<CloneRequest[]>([]);
   const [myCloneRequests, setMyCloneRequests] = useState<CloneRequest[]>([]);
   const [allCloneRequests, setAllCloneRequests] = useState<CloneRequest[]>([]);
@@ -611,9 +638,10 @@ export function Pipeline() {
   const [mySubFilter, setMySubFilter] = useState<string>('All');
   const [allSubFilter, setAllSubFilter] = useState<string>('All');
   const [myWorkSubTab, setMyWorkSubTab] = useState<'submissions' | 'clones' | 'incoming-clones' | 'demo-requests'>('submissions');
-  const [reviewSubTab, setReviewSubTab] = useState<'submissions' | 'clones'>('submissions');
+  const [reviewSubTab, setReviewSubTab] = useState<'submissions' | 'my-reviews' | 'clones' | 'demo-requests'>('submissions');
   const [allSubTab, setAllSubTab] = useState<'submissions' | 'clones' | 'demo-requests'>(isOwner ? 'submissions' : 'clones');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [activityDownloading, setActivityDownloading] = useState(false);
   const [error, setError] = useState('');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
@@ -628,7 +656,7 @@ export function Pipeline() {
   const dismissToast = useCallback((id: number) => setToasts(p => p.filter(t => t.id !== id)), []);
 
   const loadMine = useCallback(async () => {
-    try { const { items } = await getMySubmissions(); setMySubmissions(items); } catch { /* ignore */ }
+    try { const { items } = await getMySubmissions({ limit: 100 }); setMySubmissions(items); } catch { /* ignore */ }
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -645,6 +673,10 @@ export function Pipeline() {
     if (!isOwner) return;
     try { const { items } = await getPublishQueue({ limit: 100 }); setPublishQueue(items); } catch { /* ignore */ }
   }, [isOwner]);
+
+  const loadAssignedReviewQueue = useCallback(async () => {
+    try { const { items } = await getMyReviewQueue({ limit: 100 }); setAssignedReviewQueue(items); } catch { /* ignore */ }
+  }, []);
 
   const loadCloneRequests = useCallback(async () => {
     try {
@@ -679,12 +711,13 @@ export function Pipeline() {
     void loadAll();
     void loadQueue();
     void loadPublishQueue();
+    void loadAssignedReviewQueue();
     void loadCloneRequests();
     void loadMyCloneRequests();
     void loadMyDemoRequests();
     if (isAdmin || isOwner) void loadAllCloneRequests();
-    if (isAdmin || isOwner) void loadAllDemoRequests();
-  }, [authLoading, loadMine, loadAll, loadQueue, loadPublishQueue, loadCloneRequests, loadMyCloneRequests, loadAllCloneRequests, loadMyDemoRequests, loadAllDemoRequests, isAdmin, isOwner]);
+    void loadAllDemoRequests();
+  }, [authLoading, loadMine, loadAll, loadQueue, loadPublishQueue, loadAssignedReviewQueue, loadCloneRequests, loadMyCloneRequests, loadAllCloneRequests, loadMyDemoRequests, loadAllDemoRequests, isAdmin, isOwner]);
 
   // Poll while any of my submissions are still being processed by AI
   useEffect(() => {
@@ -701,9 +734,164 @@ export function Pipeline() {
     mySubFilter === 'All' ? mySubmissions : mySubmissions.filter(s => s.status === mySubFilter),
     [mySubFilter, mySubmissions]);
 
+  const logicalAllSubmissions = useMemo(() => latestLogicalSubmissions(allSubmissions), [allSubmissions]);
+
   const filteredAllSubmissions = useMemo(() =>
-    allSubFilter === 'All' ? allSubmissions : allSubmissions.filter(s => s.status === allSubFilter),
-    [allSubFilter, allSubmissions]);
+    allSubFilter === 'All' ? logicalAllSubmissions : logicalAllSubmissions.filter(s => s.status === allSubFilter),
+    [allSubFilter, logicalAllSubmissions]);
+
+  const exportCsv = (filename: string, columns: { key: string; label: string }[], rows: Record<string, unknown>[]) => {
+    const cell = (value: unknown) => {
+      const normalized = Array.isArray(value)
+        ? value.join('; ')
+        : value && typeof value === 'object'
+          ? JSON.stringify(value)
+          : String(value ?? '');
+      return `"${normalized.replace(/"/g, '""')}"`;
+    };
+    const content = [
+      columns.map(column => cell(column.label)).join(','),
+      ...rows.map(row => columns.map(column => cell(row[column.key])).join(',')),
+    ].join('\r\n');
+    const blob = new Blob([`\uFEFF${content}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadAllActivity = async () => {
+    setActivityDownloading(true);
+    try {
+      const date = new Date().toISOString().slice(0, 10);
+      if (allSubTab === 'submissions') {
+        const first = await getAllSubmissions({ limit: 200 });
+        const rows = [...first.items];
+        for (let skip = rows.length; skip < first.total; skip += 200) {
+          const page = await getAllSubmissions({ skip, limit: 200 });
+          rows.push(...page.items);
+        }
+        exportCsv(`aimplify-assets-${date}.csv`, [
+          { key: 'id', label: 'Asset ID' }, { key: 'aiv_ideation_id', label: 'AIV Ideation ID' },
+          { key: 'aiv_ideation_title', label: 'AIV Ideation Title' }, { key: 'title', label: 'Title' },
+          { key: 'description', label: 'Description' }, { key: 'family', label: 'Family' },
+          { key: 'department', label: 'Department' }, { key: 'category', label: 'Category' },
+          { key: 'maturity', label: 'Maturity' }, { key: 'cloud_provider', label: 'Cloud Provider' },
+          { key: 'demo_ready', label: 'Demo Ready' }, { key: 'tech_stack', label: 'Tech Stack' },
+          { key: 'repo_url', label: 'Repository URL' }, { key: 'demo_url', label: 'Live Demo URL' },
+          { key: 'video_url', label: 'Primary Video URL' }, { key: 'video_urls', label: 'All Video URLs' },
+          { key: 'architecture_file_url', label: 'Document References' }, { key: 'owner_name', label: 'Owner Name' },
+          { key: 'owner_email', label: 'Owner Email' }, { key: 'manager_name', label: 'Manager Name' },
+          { key: 'manager_email', label: 'Manager Email' }, { key: 'designation', label: 'Designation' },
+          { key: 'collaborators', label: 'Collaborators' }, { key: 'dependencies', label: 'Dependencies' },
+          { key: 'commands', label: 'Commands' }, { key: 'status', label: 'Status' },
+          { key: 'ai_score', label: 'AI Score' }, { key: 'ai_feedback', label: 'AI Feedback' },
+          { key: 'admin_notes', label: 'Admin Notes' }, { key: 'submitter_id', label: 'Submitter ID' },
+          { key: 'created_at', label: 'Created At' }, { key: 'updated_at', label: 'Updated At' },
+        ], latestLogicalSubmissions(rows) as unknown as Record<string, unknown>[]);
+      } else if (allSubTab === 'clones') {
+        const rows = await getAllCloneRequests();
+        exportCsv(`aimplify-clone-requests-${date}.csv`, [
+          { key: 'id', label: 'Request ID' }, { key: 'asset_id', label: 'Asset ID' },
+          { key: 'asset_title', label: 'Asset Title' }, { key: 'requester_name', label: 'Requester Name' },
+          { key: 'requester_email', label: 'Requester Email' }, { key: 'reason', label: 'Reason' },
+          { key: 'environment', label: 'Environment' }, { key: 'purpose', label: 'Purpose' },
+          { key: 'customer_name', label: 'Customer Name' }, { key: 'project_name', label: 'Project Name' },
+          { key: 'is_internal', label: 'Internal Request' }, { key: 'status', label: 'Status' },
+          { key: 'created_at', label: 'Created At' }, { key: 'decided_at', label: 'Decided At' },
+        ], rows as unknown as Record<string, unknown>[]);
+      } else {
+        const rows = await getAllDemoRequests();
+        exportCsv(`aimplify-demo-requests-${date}.csv`, [
+          { key: 'id', label: 'Request ID' }, { key: 'asset_id', label: 'Asset ID' },
+          { key: 'asset_title', label: 'Asset Title' }, { key: 'asset_slug', label: 'Asset Slug' },
+          { key: 'requester_name', label: 'Requester Name' }, { key: 'requester_email', label: 'Requester Email' },
+          { key: 'customer_name', label: 'Customer Name' }, { key: 'project_name', label: 'Project Name' },
+          { key: 'vertical', label: 'Vertical' }, { key: 'additional_details', label: 'Additional Details' },
+          { key: 'requested_at', label: 'Requested At' },
+        ], rows as unknown as Record<string, unknown>[]);
+      }
+      addToast('success', 'Download Ready', 'The complete All Activity dataset was exported successfully.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'The activity export could not be generated.';
+      addToast('error', 'Download Failed', message);
+    } finally {
+      setActivityDownloading(false);
+    }
+  };
+
+  const assetExportColumns = [
+    { key: 'id', label: 'Asset ID' }, { key: 'aiv_ideation_id', label: 'AIV Ideation ID' },
+    { key: 'aiv_ideation_title', label: 'AIV Ideation Title' }, { key: 'title', label: 'Title' },
+    { key: 'description', label: 'Description' }, { key: 'family', label: 'Family' },
+    { key: 'department', label: 'Department' }, { key: 'category', label: 'Category' },
+    { key: 'maturity', label: 'Maturity' }, { key: 'cloud_provider', label: 'Cloud Provider' },
+    { key: 'demo_ready', label: 'Demo Ready' }, { key: 'tech_stack', label: 'Tech Stack' },
+    { key: 'repo_url', label: 'Repository URL' }, { key: 'demo_url', label: 'Live Demo URL' },
+    { key: 'video_url', label: 'Primary Video URL' }, { key: 'video_urls', label: 'All Video URLs' },
+    { key: 'architecture_file_url', label: 'Document References' }, { key: 'owner_name', label: 'Owner Name' },
+    { key: 'owner_email', label: 'Owner Email' }, { key: 'manager_name', label: 'Manager Name' },
+    { key: 'manager_email', label: 'Manager Email' }, { key: 'designation', label: 'Designation' },
+    { key: 'status', label: 'Approval Status' }, { key: 'ai_score', label: 'AI Score' },
+    { key: 'ai_feedback', label: 'AI Evaluation Feedback' }, { key: 'admin_notes', label: 'Admin Notes' },
+    { key: 'submitter_id', label: 'Submitter ID' }, { key: 'created_at', label: 'Submitted At' },
+    { key: 'updated_at', label: 'Updated At' },
+  ];
+
+  const cloneExportColumns = [
+    { key: 'id', label: 'Request ID' }, { key: 'asset_id', label: 'Asset ID' },
+    { key: 'asset_title', label: 'Asset Title' }, { key: 'requester_name', label: 'Requester Name' },
+    { key: 'requester_email', label: 'Requester Email' }, { key: 'reason', label: 'Reason' },
+    { key: 'environment', label: 'Environment' }, { key: 'purpose', label: 'Purpose' },
+    { key: 'customer_name', label: 'Customer Name' }, { key: 'project_name', label: 'Project Name' },
+    { key: 'is_internal', label: 'Internal Request' }, { key: 'status', label: 'Status' },
+    { key: 'created_at', label: 'Created At' }, { key: 'decided_at', label: 'Decided At' },
+  ];
+
+  const demoExportColumns = [
+    { key: 'id', label: 'Request ID' }, { key: 'asset_id', label: 'Asset ID' },
+    { key: 'asset_title', label: 'Asset Title' }, { key: 'asset_slug', label: 'Asset Slug' },
+    { key: 'requester_name', label: 'Requester Name' }, { key: 'requester_email', label: 'Requester Email' },
+    { key: 'customer_name', label: 'Customer Name' }, { key: 'project_name', label: 'Project Name' },
+    { key: 'vertical', label: 'Vertical' }, { key: 'additional_details', label: 'Additional Details' },
+    { key: 'status', label: 'Status' }, { key: 'decision_notes', label: 'Decision Notes' },
+    { key: 'reviewed_by', label: 'Reviewed By' }, { key: 'reviewed_at', label: 'Reviewed At' },
+    { key: 'requested_at', label: 'Requested At' },
+  ];
+
+  const downloadMyWork = () => {
+    const date = new Date().toISOString().slice(0, 10);
+    if (myWorkSubTab === 'submissions') {
+      exportCsv(`aimplify-my-assets-${date}.csv`, assetExportColumns, mySubmissions as unknown as Record<string, unknown>[]);
+    } else if (myWorkSubTab === 'clones') {
+      exportCsv(`aimplify-my-repo-access-requests-${date}.csv`, cloneExportColumns, myCloneRequests as unknown as Record<string, unknown>[]);
+    } else if (myWorkSubTab === 'demo-requests') {
+      exportCsv(`aimplify-my-demo-requests-${date}.csv`, demoExportColumns, myDemoRequests as unknown as Record<string, unknown>[]);
+    } else {
+      exportCsv(`aimplify-incoming-repo-access-requests-${date}.csv`, cloneExportColumns, incomingForMyWork as unknown as Record<string, unknown>[]);
+    }
+    addToast('success', 'Download Ready', 'The selected My Work section was exported successfully.');
+  };
+
+  const downloadReviewQueue = (queue: 'approval' | 'assigned' | 'publish' | 'clones' | 'demos') => {
+    const date = new Date().toISOString().slice(0, 10);
+    if (queue === 'approval') {
+      exportCsv(`aimplify-approval-queue-${date}.csv`, assetExportColumns, pendingQueue as unknown as Record<string, unknown>[]);
+    } else if (queue === 'assigned') {
+      exportCsv(`aimplify-my-review-queue-${date}.csv`, assetExportColumns, assignedReviewQueue as unknown as Record<string, unknown>[]);
+    } else if (queue === 'publish') {
+      exportCsv(`aimplify-publish-queue-${date}.csv`, assetExportColumns, publishQueue as unknown as Record<string, unknown>[]);
+    } else if (queue === 'clones') {
+      exportCsv(`aimplify-review-repo-access-requests-${date}.csv`, cloneExportColumns, cloneRequests as unknown as Record<string, unknown>[]);
+    } else {
+      exportCsv(`aimplify-review-demo-requests-${date}.csv`, demoExportColumns, allDemoRequests as unknown as Record<string, unknown>[]);
+    }
+    addToast('success', 'Download Ready', 'The selected Review Queue section was exported successfully.');
+  };
 
   const handleApprove = async (e: MouseEvent, id: string, notes: string, title?: string) => {
     e.stopPropagation();
@@ -713,6 +901,7 @@ export function Pipeline() {
       setMySubmissions((p) => p.map((s) => s.id === id ? { ...s, status: updated.status } : s));
       setAllSubmissions((p) => p.map((s) => s.id === id ? { ...s, status: updated.status } : s));
       setPendingQueue((p) => p.filter((s) => s.id !== id));
+      setAssignedReviewQueue((p) => p.filter((s) => s.id !== id));
       addToast('success', 'Submission Approved', `"${title ?? 'Submission'}" has been approved and is now awaiting publishing by the Owner.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Approve failed.';
@@ -731,6 +920,7 @@ export function Pipeline() {
       setMySubmissions((p) => p.map((s) => s.id === id ? { ...s, status: updated.status, admin_notes: notes } : s));
       setAllSubmissions((p) => p.map((s) => s.id === id ? { ...s, status: updated.status, admin_notes: notes } : s));
       setPendingQueue((p) => p.filter((s) => s.id !== id));
+      setAssignedReviewQueue((p) => p.filter((s) => s.id !== id));
       addToast('info', 'Submission Returned', `"${title ?? 'Submission'}" has been sent back to the submitter with your notes.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Reject failed.';
@@ -849,27 +1039,86 @@ export function Pipeline() {
   };
 
   const pendingCloneCount = cloneRequests.filter((r) => r.status === 'Pending').length;
-  const reviewCount = pendingQueue.length + publishQueue.length + pendingCloneCount;
+  const pendingDemoCount = allDemoRequests.filter((request) => request.status === 'Pending').length;
+  const reviewCount = pendingQueue.length + publishQueue.length + pendingCloneCount + pendingDemoCount + assignedReviewQueue.length;
   // For non-admin/owner users, surface incoming clone requests in My Work
   const incomingForMyWork = (!isAdmin && !isOwner) ? cloneRequests : [];
   const myWorkCount = mySubmissions.length + myCloneRequests.length + incomingForMyWork.length + myDemoRequests.length;
-  const allActivityCount = allSubmissions.length + allCloneRequests.length;
+  const allActivityCount = logicalAllSubmissions.length + allCloneRequests.length;
 
   const GROUP_TABS: { id: GroupTab; label: string; icon: React.ElementType; count: number; show: boolean }[] = [
     { id: 'my-work',      label: 'My Work',       icon: User,          count: myWorkCount,      show: true },
-    { id: 'review',       label: 'Review Queue',  icon: ClipboardList, count: reviewCount,      show: isAdmin || isOwner },
+    { id: 'review',       label: 'Review Queue',  icon: ClipboardList, count: reviewCount,      show: isAdmin || isOwner || allDemoRequests.length > 0 || assignedReviewQueue.length > 0 },
     { id: 'all-activity', label: 'All Activity',  icon: LayoutGrid,    count: allActivityCount, show: isAdmin || isOwner },
   ].filter(t => t.show);
 
   const statusOptions = ['All', ...Object.keys(STATUS_CONFIG)];
+
+  const openWorkflowStage = (status: string) => {
+    if ((status === 'Manual_Approval' || status === 'Approved') && (isAdmin || isOwner)) {
+      setActiveTab('review');
+      setReviewSubTab('submissions');
+      return;
+    }
+    if (isOwner) {
+      setActiveTab('all-activity');
+      setAllSubTab('submissions');
+      setAllSubFilter(status);
+      return;
+    }
+    setActiveTab('my-work');
+    setMyWorkSubTab('submissions');
+    setMySubFilter(status);
+  };
+
+  const handleDemoApprove = async (id: string) => {
+    setActionLoading(id); setError('');
+    try {
+      const updated = await approveDemoRequest(id);
+      setAllDemoRequests(p => p.map(request => request.id === id ? updated : request));
+      setMyDemoRequests(p => p.map(request => request.id === id ? updated : request));
+      addToast('success', 'Demo Request Approved', 'The requester has been notified by email and in the notification bell.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Demo request approval failed.';
+      setError(msg); addToast('error', 'Approval Failed', msg);
+    } finally { setActionLoading(null); }
+  };
+
+  const handleDemoReject = async (id: string) => {
+    if (!confirm('Reject this demo request?')) return;
+    setActionLoading(id); setError('');
+    try {
+      const updated = await rejectDemoRequest(id);
+      setAllDemoRequests(p => p.map(request => request.id === id ? updated : request));
+      setMyDemoRequests(p => p.map(request => request.id === id ? updated : request));
+      addToast('info', 'Demo Request Rejected', 'The requester has been notified by email and in the notification bell.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Demo request rejection failed.';
+      setError(msg); addToast('error', 'Rejection Failed', msg);
+    } finally { setActionLoading(null); }
+  };
+
+  const handleAssignReview = async (id: string, title: string) => {
+    const email = prompt(`Assign "${title}" for approval.\n\nEnter the reviewer's platform email address:`)?.trim();
+    if (!email) return;
+    setActionLoading(id); setError('');
+    try {
+      const updated = await assignSubmissionReview(id, email);
+      setPendingQueue(p => p.map(sub => sub.id === id ? updated : sub));
+      addToast('success', 'Review Assigned', `The asset approval was assigned to ${updated.assigned_reviewer_email ?? email}.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not assign this review.';
+      setError(msg); addToast('error', 'Assignment Failed', msg);
+    } finally { setActionLoading(null); }
+  };
 
   return (
     <div className="animate-in fade-in duration-500 pb-12">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex flex-col justify-between gap-4 px-4 py-8 md:flex-row md:items-end md:px-10">
-        <div>
+      <div className="mx-auto w-full max-w-5xl px-4 py-8">
+        <div className="flex items-center">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold tracking-tight text-gray-900">Assets Pipeline</h1>
             {isOwner && (
@@ -878,70 +1127,77 @@ export function Pipeline() {
               </span>
             )}
           </div>
-          {/* Workflow steps */}
-          <div className="mt-4 flex flex-wrap items-start gap-0">
-            {([
-              { Icon: FileText,     label: 'Submit',        bg: 'bg-sky-500',     ring: 'ring-sky-100'     },
-              { Icon: BrainCircuit, label: 'AI Evaluation', bg: 'bg-violet-500',  ring: 'ring-violet-100'  },
-              { Icon: ShieldCheck,  label: 'Admin Review',  bg: 'bg-amber-500',   ring: 'ring-amber-100'   },
-              { Icon: BadgeCheck,   label: 'Approved',      bg: 'bg-emerald-500', ring: 'ring-emerald-100' },
-              { Icon: Rocket,       label: 'Published',     bg: 'bg-indigo-500',  ring: 'ring-indigo-100'  },
-            ] as const).map((step, i, arr) => (
-              <div key={step.label} className="flex items-start">
-                <div className="flex flex-col items-center gap-1.5">
-                  <div className={`flex h-9 w-9 items-center justify-center rounded-full ${step.bg} ring-4 ${step.ring} shadow-sm`}>
-                    <step.Icon className="h-4 w-4 text-white" />
-                  </div>
-                  <span className="text-[10px] font-bold text-gray-500 whitespace-nowrap">{step.label}</span>
-                </div>
-                {i < arr.length - 1 && <div className="mx-2 mt-[18px] h-px w-8 bg-gray-200" />}
-              </div>
-            ))}
-          </div>
         </div>
-        <Button onClick={() => navigate('/submit')} className="gap-2">
-          <Plus className="h-4 w-4" /> Submit New Asset
-        </Button>
+
+        {/* Workflow steps — constrained to the same width as the section panels below */}
+        <div className="mt-5 grid w-full grid-cols-5 gap-0">
+          {([
+            { Icon: FileText,     label: 'Submit',        status: 'Submitted',       bg: 'bg-sky-500',     ring: 'ring-sky-100'     },
+            { Icon: BrainCircuit, label: 'AI Evaluation', status: 'AI_Review',       bg: 'bg-violet-500',  ring: 'ring-violet-100'  },
+            { Icon: ShieldCheck,  label: 'Admin Review',  status: 'Manual_Approval', bg: 'bg-amber-500',   ring: 'ring-amber-100'   },
+            { Icon: BadgeCheck,   label: 'Approved',      status: 'Approved',        bg: 'bg-emerald-500', ring: 'ring-emerald-100' },
+            { Icon: Rocket,       label: 'Published',     status: 'Published',       bg: 'bg-indigo-500',  ring: 'ring-indigo-100'  },
+          ] as const).map((step, i, arr) => (
+            <div key={step.label} className="relative flex justify-center">
+              {i < arr.length - 1 && (
+                <div className="absolute left-1/2 top-[14px] h-px w-full bg-gray-200 sm:top-[16px] md:top-[18px]" />
+              )}
+              <button
+                type="button"
+                onClick={() => openWorkflowStage(step.status)}
+                title={`View ${step.label} assets`}
+                className="group relative z-10 flex min-w-0 flex-col items-center gap-1 bg-transparent px-1 outline-none sm:gap-1.5 sm:px-2"
+              >
+                <div className={`flex h-7 w-7 items-center justify-center rounded-full ${step.bg} ring-2 ${step.ring} shadow-sm sm:h-8 sm:w-8 sm:ring-[3px] md:h-9 md:w-9 md:ring-4`}>
+                  <step.Icon className="h-3 w-3 text-white sm:h-3.5 sm:w-3.5 md:h-4 md:w-4" />
+                </div>
+                <span className="max-w-full text-center text-[8px] font-bold leading-tight text-gray-500 transition-colors group-hover:text-sky-700 group-focus-visible:text-sky-700 sm:text-[9px] md:whitespace-nowrap md:text-[10px]">{step.label}</span>
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* ── Group Tabs ──────────────────────────────────────────────────── */}
       {GROUP_TABS.length > 1 && (
-        <div className="flex gap-1 border-b border-gray-200 px-4 md:px-10">
-          {GROUP_TABS.map(({ id, label, icon: Icon, count }) => {
-            const active = activeTab === id;
-            return (
-              <button
-                key={id}
-                onClick={() => { setActiveTab(id); setMySubFilter('All'); setAllSubFilter('All'); setMyWorkSubTab('submissions'); setReviewSubTab('submissions'); setAllSubTab('submissions'); }}
-                className={`relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-                  active ? 'text-sky-700' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {label}
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
-                  active ? 'bg-sky-100 text-sky-700' : 'bg-gray-100 text-gray-500'
-                }`}>{count}</span>
-                {active && (
-                  <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t-full bg-sky-500" />
-                )}
-              </button>
-            );
-          })}
+        <div className="mx-auto w-full max-w-5xl px-4">
+          <div className="flex w-full gap-1 border-b border-gray-200">
+            {GROUP_TABS.map(({ id, label, icon: Icon, count }) => {
+              const active = activeTab === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => { setActiveTab(id); setMySubFilter('All'); setAllSubFilter('All'); setMyWorkSubTab('submissions'); setReviewSubTab(!isAdmin && !isOwner && id === 'review' ? (assignedReviewQueue.length > 0 ? 'my-reviews' : 'demo-requests') : 'submissions'); setAllSubTab('submissions'); }}
+                  className={`relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+                    active ? 'text-sky-700' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                    active ? 'bg-sky-100 text-sky-700' : 'bg-gray-100 text-gray-500'
+                  }`}>{count}</span>
+                  {active && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t-full bg-sky-500" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
       <AnimatePresence>
         {error && (
           <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-            className="mx-4 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 md:mx-10">
+            className="mx-auto mt-4 w-[calc(100%-2rem)] max-w-5xl rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
             {error}
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* ── Tab Content ─────────────────────────────────────────────────── */}
-      <div className="max-w-5xl px-4 pt-6 md:px-10">
+      <div className="mx-auto w-full max-w-5xl px-4 pt-6">
 
         {/* ── MY WORK ────────────────────────────────────────────────── */}
         {activeTab === 'my-work' && (
@@ -967,6 +1223,7 @@ export function Pipeline() {
                   statusFilter={mySubFilter}
                   onStatusChange={setMySubFilter}
                   statusOptions={statusOptions}
+                  action={<Button variant="outline" onClick={downloadMyWork}><Download className="mr-2 h-4 w-4" />Download</Button>}
                 >
                   {filteredMySubmissions.length === 0 ? (
                     <EmptyState message={mySubmissions.length === 0 ? 'No submissions yet.' : 'No submissions match this filter.'} />
@@ -980,7 +1237,8 @@ export function Pipeline() {
                 </Section>
               )}
               {myWorkSubTab === 'clones' && (
-                <Section title="My Repo Access Requests" count={myCloneRequests.length}>
+                <Section title="My Repo Access Requests" count={myCloneRequests.length}
+                  action={<Button variant="outline" onClick={downloadMyWork}><Download className="mr-2 h-4 w-4" />Download</Button>}>
                   {myCloneRequests.length === 0 ? (
                     <EmptyState message="You haven't requested access to any repositories yet." />
                   ) : (
@@ -990,7 +1248,8 @@ export function Pipeline() {
                 </Section>
               )}
               {myWorkSubTab === 'demo-requests' && (
-                <Section title="My Demo Requests" count={myDemoRequests.length}>
+                <Section title="My Demo Requests" count={myDemoRequests.length}
+                  action={<Button variant="outline" onClick={downloadMyWork}><Download className="mr-2 h-4 w-4" />Download</Button>}>
                   {myDemoRequests.length === 0 ? (
                     <EmptyState message="You haven't submitted any customer demo requests yet." />
                   ) : (
@@ -1006,7 +1265,8 @@ export function Pipeline() {
                 <Section title="Incoming Clone Requests" count={incomingForMyWork.length}
                   badge={incomingForMyWork.filter(r => r.status === 'Pending').length > 0
                     ? { label: `${incomingForMyWork.filter(r => r.status === 'Pending').length} pending`, color: 'violet' }
-                    : undefined}>
+                    : undefined}
+                  action={<Button variant="outline" onClick={downloadMyWork}><Download className="mr-2 h-4 w-4" />Download</Button>}>
                   {incomingForMyWork.length === 0 ? (
                     <EmptyState message="No repo access requests for your assets." />
                   ) : (
@@ -1025,8 +1285,10 @@ export function Pipeline() {
           <div>
             <SubTabs
               tabs={[
-                { id: 'submissions', label: 'Asset Approvals', count: pendingQueue.length + publishQueue.length, urgent: pendingQueue.length + publishQueue.length > 0 },
-                { id: 'clones',      label: 'Repo Clone Requests', count: cloneRequests.length, urgent: pendingCloneCount > 0 },
+                ...((isAdmin || isOwner) ? [{ id: 'submissions', label: 'Asset Approvals', count: pendingQueue.length + publishQueue.length, urgent: pendingQueue.length + publishQueue.length > 0 }] : []),
+                { id: 'my-reviews', label: 'My Review Queue', count: assignedReviewQueue.length, urgent: assignedReviewQueue.length > 0 },
+                ...((isAdmin || isOwner) ? [{ id: 'clones', label: 'Repo Clone Requests', count: cloneRequests.length, urgent: pendingCloneCount > 0 }] : []),
+                { id: 'demo-requests', label: 'Demo Requests', count: pendingDemoCount, urgent: pendingDemoCount > 0 },
               ]}
               active={reviewSubTab}
               onChange={(t) => setReviewSubTab(t as typeof reviewSubTab)}
@@ -1036,7 +1298,8 @@ export function Pipeline() {
                 <>
                   {(isAdmin || isOwner) && (
                     <Section title="Approval Queue" count={pendingQueue.length}
-                      badge={pendingQueue.length > 0 ? { label: `${pendingQueue.length} pending`, color: 'amber' } : undefined}>
+                      badge={pendingQueue.length > 0 ? { label: `${pendingQueue.length} pending`, color: 'amber' } : undefined}
+                      action={<Button variant="outline" onClick={() => downloadReviewQueue('approval')}><Download className="mr-2 h-4 w-4" />Download</Button>}>
                       {pendingQueue.length === 0 ? (
                         <EmptyState message="No submissions awaiting approval." />
                       ) : pendingQueue.map((sub, i) => (
@@ -1044,13 +1307,15 @@ export function Pipeline() {
                           showSubmitter
                           onApprove={handleApprove} onReject={handleReject} onFinalReject={handleFinalReject}
                           onHold={handleHold} onPublish={handlePublish} onDelete={handleDelete}
+                          onAssign={handleAssignReview}
                           actionLoading={actionLoading} />
                       ))}
                     </Section>
                   )}
                   {isOwner && (
                     <Section title="Publish Queue" count={publishQueue.length}
-                      badge={publishQueue.length > 0 ? { label: `${publishQueue.length} ready to publish`, color: 'emerald' } : undefined}>
+                      badge={publishQueue.length > 0 ? { label: `${publishQueue.length} ready to publish`, color: 'emerald' } : undefined}
+                      action={<Button variant="outline" onClick={() => downloadReviewQueue('publish')}><Download className="mr-2 h-4 w-4" />Download</Button>}>
                       {publishQueue.length === 0 ? (
                         <EmptyState message="No approved submissions waiting to publish." />
                       ) : publishQueue.map((sub, i) => (
@@ -1066,13 +1331,47 @@ export function Pipeline() {
               )}
               {reviewSubTab === 'clones' && (
                 <Section title="Repo Access Requests" count={cloneRequests.length}
-                  badge={pendingCloneCount > 0 ? { label: `${pendingCloneCount} pending`, color: 'violet' } : undefined}>
+                  badge={pendingCloneCount > 0 ? { label: `${pendingCloneCount} pending`, color: 'violet' } : undefined}
+                  action={<Button variant="outline" onClick={() => downloadReviewQueue('clones')}><Download className="mr-2 h-4 w-4" />Download</Button>}>
                   {cloneRequests.length === 0 ? (
                     <EmptyState message="No repo access requests for your assets." />
                   ) : (
                     <CloneRequestList requests={cloneRequests} mode="incoming"
                       actionLoading={actionLoading}
                       onApprove={handleCloneApprove} onDeny={handleCloneDeny} />
+                  )}
+                </Section>
+              )}
+              {reviewSubTab === 'my-reviews' && (
+                <Section title="My Review Queue" count={assignedReviewQueue.length}
+                  badge={assignedReviewQueue.length > 0 ? { label: `${assignedReviewQueue.length} assigned`, color: 'violet' } : undefined}
+                  action={<Button variant="outline" onClick={() => downloadReviewQueue('assigned')}><Download className="mr-2 h-4 w-4" />Download</Button>}>
+                  {assignedReviewQueue.length === 0 ? (
+                    <EmptyState message="No asset approvals are assigned to you." />
+                  ) : assignedReviewQueue.map((sub, i) => (
+                    <SubmissionCard key={sub.id} sub={sub} index={i} role={role} userId={user?.id}
+                      showSubmitter onApprove={handleApprove} onReject={handleReject}
+                      onFinalReject={handleFinalReject} onHold={handleHold}
+                      onPublish={handlePublish} onDelete={handleDelete} actionLoading={actionLoading} />
+                  ))}
+                </Section>
+              )}
+              {reviewSubTab === 'demo-requests' && (
+                <Section title="Demo Requests" count={allDemoRequests.length}
+                  badge={pendingDemoCount > 0
+                    ? { label: `${pendingDemoCount} pending`, color: 'amber' }
+                    : undefined}
+                  action={<Button variant="outline" onClick={() => downloadReviewQueue('demos')}><Download className="mr-2 h-4 w-4" />Download</Button>}>
+                  {allDemoRequests.length === 0 ? (
+                    <EmptyState message="No demo requests have been submitted." />
+                  ) : (
+                    <div className="space-y-3">
+                      {allDemoRequests.map(request => (
+                        <DemoRequestCard key={request.id} request={request} showRequester
+                          actionLoading={actionLoading}
+                          onApprove={handleDemoApprove} onReject={handleDemoReject} />
+                      ))}
+                    </div>
                   )}
                 </Section>
               )}
@@ -1085,7 +1384,7 @@ export function Pipeline() {
           <div>
             <SubTabs
               tabs={[
-                ...(isOwner ? [{ id: 'submissions', label: 'All Submissions', count: allSubmissions.length }] : []),
+                ...(isOwner ? [{ id: 'submissions', label: 'All Submissions', count: logicalAllSubmissions.length }] : []),
                 { id: 'clones', label: 'All Clone Requests', count: allCloneRequests.length },
                 { id: 'demo-requests', label: 'All Demo Requests', count: allDemoRequests.length },
               ]}
@@ -1097,13 +1396,14 @@ export function Pipeline() {
                 <Section
                   title="All Submissions"
                   count={filteredAllSubmissions.length}
-                  total={allSubmissions.length}
+                  total={logicalAllSubmissions.length}
                   statusFilter={allSubFilter}
                   onStatusChange={setAllSubFilter}
                   statusOptions={statusOptions}
+                  action={<Button variant="outline" onClick={() => void downloadAllActivity()} disabled={activityDownloading}><Download className="mr-2 h-4 w-4" />{activityDownloading ? 'Generating...' : 'Download'}</Button>}
                 >
                   {filteredAllSubmissions.length === 0 ? (
-                    <EmptyState message={allSubmissions.length === 0 ? 'No submissions found.' : 'No submissions match this filter.'} />
+                    <EmptyState message={logicalAllSubmissions.length === 0 ? 'No submissions found.' : 'No submissions match this filter.'} />
                   ) : filteredAllSubmissions.map((sub, i) => (
                     <SubmissionCard key={sub.id} sub={sub} index={i} role={role} userId={user?.id}
                       showSubmitter
@@ -1114,7 +1414,8 @@ export function Pipeline() {
                 </Section>
               )}
               {allSubTab === 'clones' && (isAdmin || isOwner) && (
-                <Section title="All Clone Requests" count={allCloneRequests.length}>
+                <Section title="All Clone Requests" count={allCloneRequests.length}
+                  action={<Button variant="outline" onClick={() => void downloadAllActivity()} disabled={activityDownloading}><Download className="mr-2 h-4 w-4" />{activityDownloading ? 'Generating...' : 'Download'}</Button>}>
                   {allCloneRequests.length === 0 ? (
                     <EmptyState message="No clone requests on the platform yet." />
                   ) : (
@@ -1123,7 +1424,8 @@ export function Pipeline() {
                 </Section>
               )}
               {allSubTab === 'demo-requests' && (isAdmin || isOwner) && (
-                <Section title="All Customer Demo Requests" count={allDemoRequests.length}>
+                <Section title="All Customer Demo Requests" count={allDemoRequests.length}
+                  action={<Button variant="outline" onClick={() => void downloadAllActivity()} disabled={activityDownloading}><Download className="mr-2 h-4 w-4" />{activityDownloading ? 'Generating...' : 'Download'}</Button>}>
                   {allDemoRequests.length === 0 ? (
                     <EmptyState message="No customer demo requests on the platform yet." />
                   ) : (
@@ -1193,10 +1495,11 @@ interface SectionProps {
   onStatusChange?: (v: string) => void;
   statusOptions?: string[];
   badge?: { label: string; color: 'amber' | 'emerald' | 'violet' | 'rose' };
+  action?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function Section({ title, count, total, statusFilter, onStatusChange, statusOptions, badge, children }: SectionProps) {
+function Section({ title, count, total, statusFilter, onStatusChange, statusOptions, badge, action, children }: SectionProps) {
   const badgeColors = {
     amber:   'bg-amber-100 text-amber-700',
     emerald: 'bg-emerald-100 text-emerald-700',
@@ -1217,20 +1520,25 @@ function Section({ title, count, total, statusFilter, onStatusChange, statusOpti
             </span>
           )}
         </div>
-        {onStatusChange && statusOptions && (
-          <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 shadow-sm">
-            <Filter className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-            <select
-              value={statusFilter}
-              onChange={e => onStatusChange(e.target.value)}
-              className="bg-transparent text-xs font-medium text-gray-600 outline-none cursor-pointer"
-            >
-              {statusOptions.map(s => (
-                <option key={s} value={s}>
-                  {s === 'All' ? 'All statuses' : (STATUS_CONFIG[s]?.label ?? s)}
-                </option>
-              ))}
-            </select>
+        {(action || (onStatusChange && statusOptions)) && (
+          <div className="flex items-center gap-2">
+            {onStatusChange && statusOptions && (
+              <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 shadow-sm">
+                <Filter className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                <select
+                  value={statusFilter}
+                  onChange={e => onStatusChange(e.target.value)}
+                  className="bg-transparent text-xs font-medium text-gray-600 outline-none cursor-pointer"
+                >
+                  {statusOptions.map(s => (
+                    <option key={s} value={s}>
+                      {s === 'All' ? 'All statuses' : (STATUS_CONFIG[s]?.label ?? s)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {action}
           </div>
         )}
       </div>
@@ -1334,7 +1642,20 @@ function CloneRequestList({ requests, mode, actionLoading, onApprove, onDeny, on
   );
 }
 
-function DemoRequestCard({ request, showRequester }: { request: DemoRequest; showRequester?: boolean }) {
+function DemoRequestCard({ request, showRequester, actionLoading, onApprove, onReject }: {
+  request: DemoRequest;
+  showRequester?: boolean;
+  actionLoading?: string | null;
+  onApprove?: (id: string) => void;
+  onReject?: (id: string) => void;
+}) {
+  const isPending = request.status === 'Pending';
+  const isActing = actionLoading === request.id;
+  const statusClass = request.status === 'Approved'
+    ? 'bg-emerald-100 text-emerald-700'
+    : request.status === 'Rejected'
+      ? 'bg-rose-100 text-rose-700'
+      : 'bg-amber-100 text-amber-700';
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -1361,10 +1682,29 @@ function DemoRequestCard({ request, showRequester }: { request: DemoRequest; sho
             </p>
           )}
         </div>
-        <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700">
-          Demo Requested
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${statusClass}`}>
+            {request.status}
+          </span>
+          {isPending && onApprove && onReject && (
+            <div className="flex gap-2">
+              <button onClick={() => onApprove(request.id)} disabled={isActing}
+                className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
+                {isActing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />} Approve
+              </button>
+              <button onClick={() => onReject(request.id)} disabled={isActing}
+                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-100 disabled:opacity-50">
+                <XCircle className="h-3 w-3" /> Reject
+              </button>
+            </div>
+          )}
+        </div>
       </div>
+      {request.decision_notes && (
+        <p className="mt-2 border-t border-gray-100 pt-2 text-xs text-gray-500">
+          <span className="font-semibold">Decision notes:</span> {request.decision_notes}
+        </p>
+      )}
     </motion.div>
   );
 }

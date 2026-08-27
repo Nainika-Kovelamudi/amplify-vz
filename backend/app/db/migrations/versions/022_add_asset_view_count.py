@@ -15,7 +15,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("catalog_assets", sa.Column("view_count", sa.Integer(), nullable=False, server_default="0"))
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("catalog_assets")}
+    if "view_count" not in columns:
+        op.add_column("catalog_assets", sa.Column("view_count", sa.Integer(), nullable=False, server_default="0"))
 
 
 def downgrade() -> None:

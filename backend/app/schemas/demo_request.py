@@ -11,6 +11,12 @@ class DemoRequestCreate(BaseModel):
     asset_id: UUID
     customer_name: str
     project_name: str
+    vertical: Optional[str] = None
+    additional_details: Optional[str] = None
+
+
+class DemoRequestDecision(BaseModel):
+    notes: Optional[str] = None
 
 
 class DemoRequestResponse(BaseModel):
@@ -22,6 +28,12 @@ class DemoRequestResponse(BaseModel):
     requester_email: Optional[str] = None
     customer_name: str
     project_name: str
+    vertical: Optional[str] = None
+    additional_details: Optional[str] = None
+    status: str = "Pending"
+    decision_notes: Optional[str] = None
+    reviewed_by: Optional[UUID] = None
+    reviewed_at: Optional[datetime] = None
     requested_at: datetime
 
     model_config = {"from_attributes": True}

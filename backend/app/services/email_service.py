@@ -4,6 +4,7 @@ import asyncio
 import logging
 import smtplib
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from email.mime.text import MIMEText
 
 from app.config import get_settings
@@ -215,6 +216,62 @@ async def _send(to_email: str, subject: str, html_body: str) -> None:
     except Exception as exc:
         logger.error("Email send failed to %s: %s", to_email, exc, exc_info=True)
         raise
+
+
+async def send_email_with_attachment(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    filename: str,
+    content: bytes,
+    content_type: str,
+) -> None:
+    """Send one binary attachment through the configured SMTP or ACS provider."""
+    import base64
+
+    settings = get_settings()
+    if settings.email_dev_override:
+        logger.info("EMAIL_DEV_OVERRIDE — redirecting <%s> to <%s>", to_email, settings.email_dev_override)
+        subject = f"[LOCAL DEV] {subject}"
+        to_email = settings.email_dev_override
+
+    if settings.smtp_user:
+        def smtp_send() -> None:
+            msg = MIMEMultipart("mixed")
+            msg["Subject"] = subject
+            msg["From"] = settings.smtp_from or settings.smtp_user
+            msg["To"] = to_email
+            alternative = MIMEMultipart("alternative")
+            alternative.attach(MIMEText(html_body, "html"))
+            msg.attach(alternative)
+            attachment = MIMEApplication(content, _subtype=content_type.split("/", 1)[-1])
+            attachment.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(attachment)
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+                if settings.smtp_use_tls:
+                    server.starttls()
+                server.login(settings.smtp_user, settings.smtp_password)
+                server.sendmail(settings.smtp_from or settings.smtp_user, to_email, msg.as_string())
+        await asyncio.to_thread(smtp_send)
+        return
+
+    if settings.email_connection_string:
+        from azure.communication.email.aio import EmailClient
+        async with EmailClient.from_connection_string(settings.email_connection_string) as client:
+            poller = await client.begin_send({
+                "senderAddress": settings.smtp_from or "DoNotReply@amplify.infovision.com",
+                "recipients": {"to": [{"address": to_email}]},
+                "content": {"subject": subject, "html": html_body},
+                "attachments": [{
+                    "name": filename,
+                    "contentType": content_type,
+                    "contentInBase64": base64.b64encode(content).decode("ascii"),
+                }],
+            })
+            await poller.result()
+        return
+
+    raise RuntimeError("No email provider configured.")
 
 
 # ── Notification emails ────────────────────────────────────────────────────────

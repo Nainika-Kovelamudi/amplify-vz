@@ -11,6 +11,10 @@ export interface DemoRequest {
   project_name: string;
   vertical?: string;
   additional_details?: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  decision_notes?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
   requested_at: string;
 }
 
@@ -39,5 +43,15 @@ export async function getDemoRequestsForAsset(assetId: string): Promise<DemoRequ
 
 export async function getAllDemoRequests(): Promise<DemoRequest[]> {
   const { data } = await apiClient.get<DemoRequest[]>('/demo-requests');
+  return data;
+}
+
+export async function approveDemoRequest(id: string, notes?: string): Promise<DemoRequest> {
+  const { data } = await apiClient.patch<DemoRequest>(`/demo-requests/${id}/approve`, { notes });
+  return data;
+}
+
+export async function rejectDemoRequest(id: string, notes?: string): Promise<DemoRequest> {
+  const { data } = await apiClient.patch<DemoRequest>(`/demo-requests/${id}/reject`, { notes });
   return data;
 }

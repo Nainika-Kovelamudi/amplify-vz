@@ -47,7 +47,7 @@ def _build_query(
 @router.get("", response_model=ActivityLogListResponse)
 async def get_audit_log(
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=5000),
     action: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
     actor_email: Optional[str] = Query(None),

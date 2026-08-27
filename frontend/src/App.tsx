@@ -11,7 +11,6 @@ import { FamilyDetail } from './pages/FamilyDetail';
 import { Pipeline } from './pages/Pipeline';
 import { PipelineDetail } from './pages/PipelineDetail';
 import { Submit } from './pages/Submit';
-import { AdminDashboard } from './pages/AdminDashboard';
 import { AdminUsers } from './pages/AdminUsers';
 import { AuditLog } from './pages/AuditLog';
 import { Observability } from './pages/Observability';
@@ -54,7 +53,7 @@ function App() {
               <Route path="pipeline/:id" element={<PipelineDetail />} />
               <Route path="submit" element={<Submit />} />
               <Route path="why" element={<WhyAimplify />} />
-              <Route path="admin" element={<AdminGuard><AdminDashboard /></AdminGuard>} />
+              <Route path="admin" element={<AdminGuard superAdminOnly><Observability /></AdminGuard>} />
               <Route path="admin/users" element={<AdminGuard superAdminOnly><AdminUsers /></AdminGuard>} />
               <Route path="admin/audit" element={<AdminGuard superAdminOnly><AuditLog /></AdminGuard>} />
               <Route path="admin/observability" element={<AdminGuard superAdminOnly><Observability /></AdminGuard>} />

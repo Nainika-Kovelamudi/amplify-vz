@@ -4,8 +4,8 @@ export interface SubmissionComment {
   id: string;
   submission_id: string;
   author_id: string;
-  author_name: string;
-  author_email: string;
+  author_name: string | null;
+  author_email: string | null;
   body: string;
   created_at: string;
 }

@@ -24,7 +24,7 @@ function putBlobPart(
     xhr.open('PUT', url);
     xhr.setRequestHeader('Content-Type', contentType);
     Object.entries(headers ?? {}).forEach(([name, value]) => xhr.setRequestHeader(name, value));
-    xhr.timeout = 120_000;
+    xhr.timeout = 180_000;
     xhr.upload.onprogress = event => onProgress?.(event.loaded);
     xhr.onload = () => xhr.status >= 200 && xhr.status < 300
       ? resolve()
@@ -36,7 +36,12 @@ function putBlobPart(
 }
 
 async function uploadVideoInBlocks(file: File, uploadUrl: string, onProgress?: (percent: number) => void): Promise<void> {
-  const blockSize = 2 * 1024 * 1024;
+  // Larger blocks and four workers substantially reduce request overhead while
+  // remaining conservative enough for corporate networks and large videos.
+  const blockSize = file.size >= 512 * 1024 * 1024
+    ? 16 * 1024 * 1024
+    : 8 * 1024 * 1024;
+  const concurrency = 4;
   const blockCount = Math.ceil(file.size / blockSize);
   const blockIds = Array.from({ length: blockCount }, (_, index) => btoa(index.toString().padStart(8, '0')));
   const loadedByBlock = new Array<number>(blockCount).fill(0);
@@ -62,12 +67,15 @@ async function uploadVideoInBlocks(file: File, uploadUrl: string, onProgress?: (
           break;
         } catch (error) {
           lastError = error instanceof Error ? error : new Error('Video block upload failed.');
+          if (attempt < 3) {
+            await new Promise(resolve => window.setTimeout(resolve, 500 * (2 ** (attempt - 1))));
+          }
         }
       }
       if (lastError) throw lastError;
     }
   };
-  await Promise.all(Array.from({ length: Math.min(2, blockCount) }, () => worker()));
+  await Promise.all(Array.from({ length: Math.min(concurrency, blockCount) }, () => worker()));
   const blockList = `<?xml version="1.0" encoding="utf-8"?><BlockList>${blockIds.map(id => `<Latest>${id}</Latest>`).join('')}</BlockList>`;
   await putBlobPart(
     `${uploadUrl}&comp=blocklist`,

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Download, Filter, Search } from 'lucide-react';
-import { getAuditLogs, exportAuditLogsUrl, type AuditLog } from '../lib/adminService';
+import { downloadAuditLogs, getAuditLogs, type AuditLog } from '../lib/adminService';
 import { useAuth } from '../context/AuthContext';
 
 const ENTITY_TYPES = ['submission', 'catalog_asset', 'clone_request', 'user'];
@@ -30,6 +30,8 @@ export function AuditLog() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
@@ -66,6 +68,24 @@ export function AuditLog() {
 
   const totalPages = Math.ceil(total / pageSize);
 
+  const handleDownload = async () => {
+    setDownloading(true);
+    setDownloadError('');
+    try {
+      await downloadAuditLogs({
+        ...(search && { actor_email: search }),
+        ...(actionFilter && { action: actionFilter }),
+        ...(entityFilter && { entity_type: entityFilter }),
+        ...(dateFrom && { date_from: dateFrom }),
+        ...(dateTo && { date_to: dateTo }),
+      });
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : 'Unable to download the audit log.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <div className="animate-in fade-in duration-300 px-4 py-8 md:px-10">
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -73,21 +93,22 @@ export function AuditLog() {
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">Audit Log</h1>
           <p className="mt-1 text-sm text-gray-500">{total.toLocaleString()} events · immutable · super-admin only</p>
         </div>
-        <a
-          href={exportAuditLogsUrl({
-            ...(search && { actor_email: search }),
-            ...(actionFilter && { action: actionFilter }),
-            ...(entityFilter && { entity_type: entityFilter }),
-            ...(dateFrom && { date_from: dateFrom }),
-            ...(dateTo && { date_to: dateTo }),
-          })}
-          download
+        <button
+          type="button"
+          onClick={() => void handleDownload()}
+          disabled={downloading}
           className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors"
         >
           <Download className="h-4 w-4" />
-          Export CSV
-        </a>
+          Download
+        </button>
       </div>
+
+      {downloadError && (
+        <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+          {downloadError}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">

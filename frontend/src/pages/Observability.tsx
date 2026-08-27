@@ -5,9 +5,10 @@ import {
   Users, Eye, MousePointerClick, TrendingUp, Activity,
   RefreshCw, Download, Search, ChevronRight, BarChart3,
   Clock, Layers, Star, GitBranch, Package, X, PlayCircle,
+  ClipboardList, FileCheck, Rocket, ArrowUpRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { getAuditLogs, getUsers, exportAuditLogsUrl, type AuditLog, type AppUser } from '../lib/adminService';
+import { downloadObservabilityReport, getAdminStats, getAuditLogs, getUsers, exportAuditLogsUrl, type AdminStats, type AuditLog, type AppUser, type ExecutiveReportFormat } from '../lib/adminService';
 import { getCatalog, type CatalogAsset } from '../lib/catalogService';
 
 function Skeleton({ className }: { className?: string }) {
@@ -104,9 +105,12 @@ export function Observability() {
   const { user } = useAuth();
 
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [metricLogs, setMetricLogs] = useState<AuditLog[]>([]);
   const [totalLogs, setTotalLogs] = useState(0);
+  const [totalEventCount, setTotalEventCount] = useState(0);
   const [assets, setAssets] = useState<CatalogAsset[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
+  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
   const [userActivity, setUserActivity] = useState<UserActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -114,25 +118,32 @@ export function Observability() {
   const [page, setPage] = useState(0);
   const [modal, setModal] = useState<KpiModal | null>(null);
   const [assetModal, setAssetModal] = useState<CatalogAsset | null>(null);
+  const [reportFormat, setReportFormat] = useState<ExecutiveReportFormat>('xlsx');
+  const [reportDownloading, setReportDownloading] = useState(false);
   const PAGE_SIZE = 20;
 
   const actionFreq: Record<string, number> = {};
-  logs.forEach(l => { actionFreq[l.action] = (actionFreq[l.action] || 0) + 1; });
+  metricLogs.forEach(l => { actionFreq[l.action] = (actionFreq[l.action] || 0) + 1; });
   const topActions = Object.entries(actionFreq).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const maxActionCount = topActions[0]?.[1] ?? 1;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [logsRes, usersRes, catalogRes] = await Promise.all([
-        getAuditLogs({ limit: 200, actor_email: search || undefined, action: filterAction || undefined }),
+      const [logsRes, metricLogsRes, usersRes, catalogRes, statsRes] = await Promise.all([
+        getAuditLogs({ limit: 5000, actor_email: search || undefined, action: filterAction || undefined }),
+        getAuditLogs({ limit: 5000 }),
         getUsers({ limit: 100 }),
-        getCatalog({ limit: 100 }),
+        getCatalog({ limit: 500 }),
+        getAdminStats(),
       ]);
 
       setLogs(logsRes.items);
       setTotalLogs(logsRes.total);
+      setMetricLogs(metricLogsRes.items);
+      setTotalEventCount(metricLogsRes.total);
       setUsers(usersRes.items);
+      setAdminStats(statsRes);
       setAssets(catalogRes.items.sort((a, b) =>
         (b.view_count + b.clone_request_count + b.demo_request_count) -
         (a.view_count + a.clone_request_count + a.demo_request_count)
@@ -140,7 +151,7 @@ export function Observability() {
 
       // Build per-user activity
       const userMap: Record<string, UserActivity> = {};
-      logsRes.items.forEach(log => {
+      metricLogsRes.items.forEach(log => {
         const key = log.actor_email ?? 'unknown';
         if (!userMap[key]) userMap[key] = {
           email: key, name: log.actor_display_name ?? key,
@@ -175,10 +186,11 @@ export function Observability() {
 
   const filteredLogs = logs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const totalPages = Math.ceil(logs.length / PAGE_SIZE);
+  const activeUserActivity = userActivity.filter(userItem => userItem.actions > 0);
 
   // Viewers per asset from logs
   const assetViewers: Record<string, { name: string; email: string; count: number }[]> = {};
-  logs.filter(l => l.action === 'asset_viewed').forEach(l => {
+  metricLogs.filter(l => l.action === 'asset_viewed').forEach(l => {
     const assetTitle = (l.metadata?.asset_title as string) ?? l.entity_id ?? 'Unknown';
     if (!assetViewers[assetTitle]) assetViewers[assetTitle] = [];
     const existing = assetViewers[assetTitle].find(v => v.email === l.actor_email);
@@ -187,23 +199,23 @@ export function Observability() {
   });
 
   const totalViews = assets.reduce((s, a) => s + (a.view_count ?? 0), 0);
-  const totalClones = logs.filter(l => l.action === 'clone_requested').length;
-  const totalDemos = logs.filter(l => l.action === 'demo_requested').length;
-  const totalSubmissions = logs.filter(l => l.action === 'submission_created').length;
+  const totalClones = assets.reduce((sum, asset) => sum + (asset.clone_request_count ?? 0), 0);
+  const totalDemos = assets.reduce((sum, asset) => sum + (asset.demo_request_count ?? 0), 0);
+  const totalSubmissions = metricLogs.filter(l => l.action === 'submission_created').length;
 
   const kpis = [
     {
-      label: 'Total Events', value: totalLogs, icon: <Activity className="h-5 w-5" />, color: '#6366f1',
+      label: 'Total Events', value: totalEventCount, icon: <Activity className="h-5 w-5" />, color: '#6366f1',
       onClick: () => setModal({
         title: 'Event Breakdown',
         rows: Object.entries(actionFreq).sort((a,b)=>b[1]-a[1]).map(([k,v]) => ({ label: ACTION_LABEL[k] ?? k, value: v })),
       }),
     },
     {
-      label: 'Active Users', value: userActivity.length, icon: <Users className="h-5 w-5" />, color: '#0ea5e9',
+      label: 'Active Users', value: activeUserActivity.length, icon: <Users className="h-5 w-5" />, color: '#0ea5e9',
       onClick: () => setModal({
         title: 'Active Users',
-        rows: userActivity.slice(0, 20).map(u => ({ label: u.name, value: u.actions, sub: u.email })),
+        rows: activeUserActivity.map(u => ({ label: u.name, value: u.actions, sub: u.email })),
       }),
     },
     {
@@ -231,10 +243,38 @@ export function Observability() {
       label: 'Submissions', value: totalSubmissions, icon: <Package className="h-5 w-5" />, color: '#8b5cf6',
       onClick: () => setModal({
         title: 'Submissions by User',
-        rows: userActivity.filter(u => u.actions > 0).slice(0,15).map(u => ({
-          label: u.name, value: logs.filter(l => l.actor_email === u.email && l.action === 'submission_created').length, sub: u.email,
+        rows: activeUserActivity.map(u => ({
+          label: u.name, value: metricLogs.filter(l => l.actor_email === u.email && l.action === 'submission_created').length, sub: u.email,
         })).filter(r => r.value > 0),
       }),
+    },
+  ];
+
+  const governanceKpis = [
+    {
+      label: 'Published Assets', value: adminStats?.published_assets ?? 0, icon: FileCheck,
+      color: 'text-teal-700', bg: 'from-teal-50 to-cyan-50', ring: 'ring-teal-100', iconBg: 'bg-teal-100',
+      action: () => navigate('/catalog'),
+    },
+    {
+      label: 'Awaiting Publish', value: adminStats?.awaiting_publish ?? 0, icon: Rocket,
+      color: 'text-emerald-700', bg: 'from-emerald-50 to-teal-50', ring: 'ring-emerald-100', iconBg: 'bg-emerald-100',
+      action: () => navigate('/pipeline?tab=publish'),
+    },
+    {
+      label: 'Pending Approvals', value: adminStats?.pending_approvals ?? 0, icon: ClipboardList,
+      color: 'text-amber-600', bg: 'from-amber-50 to-orange-50', ring: 'ring-amber-100', iconBg: 'bg-amber-100',
+      action: () => navigate('/pipeline?tab=queue'),
+    },
+    {
+      label: 'Pending Clones', value: adminStats?.pending_clones ?? 0, icon: GitBranch,
+      color: 'text-indigo-600', bg: 'from-indigo-50 to-violet-50', ring: 'ring-indigo-100', iconBg: 'bg-indigo-100',
+      action: () => navigate('/pipeline?tab=clones'),
+    },
+    {
+      label: 'Pending Demos', value: adminStats?.pending_demos ?? 0, icon: PlayCircle,
+      color: 'text-pink-600', bg: 'from-pink-50 to-rose-50', ring: 'ring-pink-100', iconBg: 'bg-pink-100',
+      action: () => navigate('/pipeline?tab=demo-requests'),
     },
   ];
 
@@ -250,6 +290,33 @@ export function Observability() {
             <p className="text-xs text-gray-400 mt-0.5">Full platform traceability — user activity, asset engagement, and live event stream</p>
           </div>
           <div className="flex items-center gap-2">
+            <select
+              value={reportFormat}
+              onChange={(event) => setReportFormat(event.target.value as ExecutiveReportFormat)}
+              aria-label="Report format"
+              className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 outline-none focus:border-indigo-400"
+            >
+              <option value="xlsx">Excel</option>
+              <option value="docx">Word</option>
+              <option value="pdf">PDF</option>
+            </select>
+            <button
+              disabled={reportDownloading}
+              onClick={async () => {
+                setReportDownloading(true);
+                try {
+                  await downloadObservabilityReport(reportFormat);
+                } catch (error) {
+                  console.error('[Observability] Report download failed:', error);
+                  window.alert(`Unable to generate the ${reportFormat.toUpperCase()} report. Please verify the latest backend package is deployed and try again.`);
+                } finally {
+                  setReportDownloading(false);
+                }
+              }}
+              className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Download className="h-3.5 w-3.5" /> {reportDownloading ? 'Generating...' : 'Download'}
+            </button>
             <button onClick={() => void load()} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
@@ -259,23 +326,53 @@ export function Observability() {
 
       <div className="mx-auto max-w-7xl px-6 py-6 md:px-10 space-y-6">
 
+        {/* Governance workflow — consolidated from the Admin Dashboard */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-sm font-bold text-slate-800">Asset Governance</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+            {governanceKpis.map((card, index) => {
+              const Icon = card.icon;
+              return (
+                <motion.div key={card.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: index * 0.05 }} onClick={card.action}
+                  className="group relative min-h-[116px] cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{card.label}</p>
+                    <div className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${card.iconBg}`}>
+                      <Icon className={`h-4 w-4 ${card.color}`} />
+                    </div>
+                  </div>
+                  <div className="mt-2">
+                    {loading ? <Skeleton className="mb-1 h-7 w-12" /> : <p className={`text-2xl font-extrabold tracking-tight ${card.color}`}>{card.value.toLocaleString()}</p>}
+                  </div>
+                  <ArrowUpRight className={`absolute bottom-3 right-3 h-3.5 w-3.5 ${card.color} opacity-0 transition-opacity group-hover:opacity-60`} />
+                </motion.div>
+              );
+            })}
+          </div>
+        </section>
+
         {/* KPI Row — all clickable */}
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-          {kpis.map((k, i) => (
-            <motion.div key={k.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-              onClick={k.onClick}
-              className="group cursor-pointer rounded-xl bg-white p-4 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg" style={{ backgroundColor: `${k.color}18`, color: k.color }}>
-                  {k.icon}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-sm font-bold text-slate-800">Platform Activity</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+            {kpis.map((k, i) => (
+              <motion.div key={k.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                onClick={k.onClick}
+                className="group min-h-[116px] cursor-pointer rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{k.label}</p>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${k.color}18`, color: k.color }}>
+                    {k.icon}
+                  </div>
                 </div>
-                <ChevronRight className="h-3.5 w-3.5 text-gray-300 group-hover:text-gray-500 transition-colors" />
-              </div>
-              {loading ? <Skeleton className="h-7 w-12 mb-1" /> : <div className="text-2xl font-bold text-gray-900">{k.value}</div>}
-              <div className="text-[11px] text-gray-400 font-medium">{k.label}</div>
-            </motion.div>
-          ))}
-        </div>
+                <div className="mt-2">
+                  {loading ? <Skeleton className="mb-1 h-7 w-12" /> : <div className="text-2xl font-extrabold tracking-tight text-slate-900">{k.value}</div>}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </section>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           {/* Top Event Types */}
@@ -331,9 +428,9 @@ export function Observability() {
               <Users className="h-4 w-4 text-sky-500" /> Most Active Users
             </h2>
             {loading ? <div className="space-y-3">{Array.from({length:6}).map((_,i)=><Skeleton key={i} className="h-10 w-full"/>)}</div>
-            : userActivity.length === 0 ? <p className="text-xs text-gray-400">No activity found.</p>
+            : activeUserActivity.length === 0 ? <p className="text-xs text-gray-400">No activity found.</p>
             : <div className="space-y-1">
-                {userActivity.slice(0, 7).map(u => (
+                {activeUserActivity.slice(0, 7).map(u => (
                   <div key={u.email} className="flex items-center gap-2.5 rounded-lg p-2 hover:bg-gray-50 cursor-pointer transition-colors"
                     onClick={() => setModal({
                       title: `Activity — ${u.name}`,

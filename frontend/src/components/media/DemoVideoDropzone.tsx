@@ -11,9 +11,7 @@ type DemoVideoDropzoneProps = {
 };
 
 function demoReadyLabel(url: string): string {
-  const u = url.trim().toLowerCase();
-  if (!u) return 'Demo media';
-  return /\.(png|jpg|jpeg|webp|gif|svg)(\?|$)/.test(u) ? 'Image demo ready' : 'Video demo ready';
+  return url.trim() ? 'Video demo ready' : 'Demo video';
 }
 
 export function DemoVideoDropzone({ videoUrl, onVideoUrlChange, disabled, entityId, family }: DemoVideoDropzoneProps) {
@@ -28,11 +26,14 @@ export function DemoVideoDropzone({ videoUrl, onVideoUrlChange, disabled, entity
   const runUpload = useCallback(async (file: File | undefined) => {
     if (!file || disabled || hasMedia) return;
     setError('');
+    if (!file.type.startsWith('video/')) {
+      setError('Please select a video file. Images are not supported for demo uploads.');
+      return;
+    }
     setUploading(true);
     setProgress(0);
     try {
-      const mediaType = file.type.startsWith('image/') ? 'image' : 'video';
-      const { url } = await uploadMedia(file, mediaType, setProgress, entityId, family);
+      const { url } = await uploadMedia(file, 'video', setProgress, entityId, family);
       onVideoUrlChange(url);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Upload failed.');
@@ -40,7 +41,7 @@ export function DemoVideoDropzone({ videoUrl, onVideoUrlChange, disabled, entity
       setUploading(false);
       setProgress(0);
     }
-  }, [disabled, hasMedia, onVideoUrlChange]);
+  }, [disabled, entityId, family, hasMedia, onVideoUrlChange]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -79,7 +80,7 @@ export function DemoVideoDropzone({ videoUrl, onVideoUrlChange, disabled, entity
             : isDragging ? 'border-sky-500 bg-sky-50'
             : 'border-gray-300 bg-gray-50/50 hover:border-sky-400 hover:bg-sky-50/40'}`}
         >
-          <input ref={inputRef} type="file" accept="video/*,image/*" className="hidden" disabled={disabled || uploading} onChange={onBrowse} />
+          <input ref={inputRef} type="file" accept="video/*" className="hidden" disabled={disabled || uploading} onChange={onBrowse} />
           {uploading ? (
             <div className="flex w-full flex-1 flex-col items-center justify-center gap-3 text-sky-700">
               <Loader2 className="h-10 w-10 shrink-0 animate-spin" />
@@ -93,8 +94,8 @@ export function DemoVideoDropzone({ videoUrl, onVideoUrlChange, disabled, entity
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-gray-200">
                 <Upload className="h-6 w-6 text-sky-500" />
               </div>
-              <div className="text-sm font-bold text-gray-900">Upload video or image demo</div>
-              <div className="max-w-md text-xs leading-relaxed text-gray-500">Video up to 800 MB · Images up to 25 MB · drag & drop or browse</div>
+              <div className="text-sm font-bold text-gray-900">Upload demo video</div>
+              <div className="max-w-md text-xs leading-relaxed text-gray-500">Video up to 800 MB · drag & drop or browse</div>
               <button type="button" disabled={disabled || uploading} onClick={() => inputRef.current?.click()}
                 className="mt-1 shrink-0 rounded-lg border border-sky-200 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wide text-sky-700 shadow-sm transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50">
                 Browse files

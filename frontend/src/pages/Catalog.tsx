@@ -5,15 +5,18 @@ import { useFamilies } from '../context/FamiliesContext';
 import { AssetCard } from '../components/catalog/AssetCard';
 import { AssetRow } from '../components/catalog/AssetRow';
 import { Button } from '../components/ui/Button';
-import { LayoutGrid, List, SearchX } from 'lucide-react';
+import { Download, LayoutGrid, List, SearchX } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { getCatalog, type CatalogAsset } from '../lib/catalogService';
+import { useAuth } from '../context/AuthContext';
 
 const CC: Record<string, string> = { aws: '#FF9900', gcp: '#4285F4', azure: '#0078D4' };
 const CL: Record<string, string> = { aws: 'AWS', gcp: 'GCP', azure: 'Azure' };
 const ML: Record<string, string> = { Experimental: 'Experimental', 'Battle-Tested': 'Battle-Tested', Production: 'Production' };
 
 export function Catalog() {
+  const { user } = useAuth();
+  const canDownload = user?.role === 'Aimplify.Admin' || user?.role === 'Aimplify.Owner';
   const { families } = useFamilies();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get('q') || '';
@@ -27,6 +30,7 @@ export function Catalog() {
   });
   const [demoReady, setDemoReady] = useState(() => searchParams.get('demo') === 'true');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +42,93 @@ export function Catalog() {
 
   const toggleCloud = (c: string) => setCloudFilters((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]);
   const toggleMaturity = (m: string) => setMaturityFilters((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]);
+
+  const downloadCatalogCsv = async () => {
+    setIsDownloading(true);
+    try {
+      const firstPage = await getCatalog({ limit: 500 });
+      const allAssets = [...firstPage.items];
+
+      for (let skip = allAssets.length; skip < firstPage.total; skip += 500) {
+        const page = await getCatalog({ skip, limit: 500 });
+        allAssets.push(...page.items);
+      }
+
+      const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const formatDemoReference = (value: string) => {
+        try {
+          const hostname = new URL(value).hostname.toLowerCase();
+          return hostname.endsWith('.blob.core.windows.net') ? 'Demo Video' : value;
+        } catch {
+          return value;
+        }
+      };
+      const documentUrls = (raw: string | null) => {
+        const empty = { architecture: '', salesPitch: '', marketing: '', technical: '' };
+        if (!raw) return empty;
+        try {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          return {
+            architecture: String(parsed.overall_architecture ?? ''),
+            salesPitch: String(parsed.sales_pitch ?? ''),
+            marketing: String(parsed.marketing_collateral ?? ''),
+            technical: String(parsed.technical_delivery ?? ''),
+          };
+        } catch {
+          return { ...empty, architecture: raw };
+        }
+      };
+      const rows = [
+        [
+          'Assets ID', 'Asset_name', 'Family_ID', 'Author', 'Owner_Email',
+          'Department', 'Maturity Status', 'Hyperscaler', 'Demo Ready', 'Demo Video or URL',
+          'Github Repo URL', 'Tech Stack', 'Architecture Doc', 'Sales Pitch Doc',
+          'Marketing Doc', 'Technical Doc', 'Published', 'Updated',
+        ],
+        ...allAssets.map((asset) => {
+          const docs = documentUrls(asset.architecture_file_url);
+          const demos = [...new Set([
+            ...(asset.video_urls ?? []),
+            ...(asset.video_url ? [asset.video_url] : []),
+            ...(asset.demo_url ? [asset.demo_url] : []),
+          ].filter(Boolean).map(formatDemoReference))].join('; ');
+          return [
+            asset.catalog_code,
+            asset.title,
+            asset.family,
+            asset.owner_name || '',
+            asset.owner_email || '',
+            asset.department,
+            asset.maturity || '',
+            asset.cloud_provider || '',
+            asset.demo_ready ? 'Yes' : 'No',
+            demos,
+            asset.repo_url || '',
+            (asset.tech_stack ?? []).join('; '),
+            docs.architecture ? 'Yes' : 'No',
+            docs.salesPitch ? 'Yes' : 'No',
+            docs.marketing ? 'Yes' : 'No',
+            docs.technical ? 'Yes' : 'No',
+            asset.created_at,
+            asset.updated_at,
+          ];
+        }),
+      ];
+      const blob = new Blob([`\uFEFF${rows.map((row) => row.map(csvCell).join(',')).join('\r\n')}`], {
+        type: 'text/csv;charset=utf-8',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `aimplify-catalog-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   const filteredAssets = useMemo(() => assets.filter((a) => {
     if (familyFilter !== 'all' && a.family !== familyFilter) return false;
@@ -76,6 +167,12 @@ export function Catalog() {
           <p className="mt-1 text-sm text-gray-500">{isLoading ? 'Loading assets...' : `${filteredAssets.length} of ${assets.length} assets`}</p>
         </div>
         <div className="flex items-center gap-3">
+          {canDownload && (
+            <Button variant="outline" onClick={downloadCatalogCsv} disabled={isLoading || isDownloading}>
+              <Download className="mr-2 h-4 w-4" />
+              {isDownloading ? 'Generating...' : 'Download'}
+            </Button>
+          )}
           <div className="flex items-center rounded-lg bg-gray-100 p-1">
             <button onClick={() => setViewMode('grid')} className={cn("rounded-md p-1.5 transition-all", viewMode === 'grid' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900")}>
               <LayoutGrid className="h-4 w-4" />

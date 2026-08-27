@@ -1166,7 +1166,7 @@ export function AssetDetail() {
                   onClick={() => setReqsModal('clone')}
                   className="flex flex-col items-center gap-1 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-3 w-full hover:bg-emerald-50 transition-colors">
                   <GitBranch className="h-4 w-4" style={{ color: '#10B981' }} />
-                  <span className="text-lg font-bold tabular-nums" style={{ color: '#10B981' }}>{allCloneReqs.length || cloneCount}</span>
+                  <span className="text-lg font-bold tabular-nums" style={{ color: '#10B981' }}>{cloneCount}</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Clone Requests</span>
                 </button>
                 <StatCard icon={Rocket} label="Deployments" value={deploymentCount} color="#F59E0B" />
@@ -1174,7 +1174,7 @@ export function AssetDetail() {
                   onClick={() => setReqsModal('demo')}
                   className="flex flex-col items-center gap-1 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-3 w-full hover:bg-rose-50 transition-colors">
                   <Users className="h-4 w-4" style={{ color: '#F43F5E' }} />
-                  <span className="text-lg font-bold tabular-nums" style={{ color: '#F43F5E' }}>{allDemoReqs.length || demoRequestCount}</span>
+                  <span className="text-lg font-bold tabular-nums" style={{ color: '#F43F5E' }}>{demoRequestCount}</span>
                   <span className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Demo Requests</span>
                 </button>
                 <StatCard icon={Heart}       label="Likes"          value={likeCount}                        color="#F43F5E" />

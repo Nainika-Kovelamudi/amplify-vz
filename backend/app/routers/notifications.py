@@ -80,7 +80,7 @@ async def mark_read(
     if body.mark_all:
         stmt = update(Notification).where(*base_filter).values(read=True, read_at=now)
     else:
-        ids = [str(nid) for nid in (body.notification_ids or [])]
+        ids = body.notification_ids or []
         stmt = update(Notification).where(*base_filter, Notification.id.in_(ids)).values(read=True, read_at=now)
 
     result = await db.execute(stmt.execution_options(synchronize_session="fetch"))

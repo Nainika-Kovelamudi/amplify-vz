@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict
 
 
 class CatalogAssetBase(BaseModel):
+    aiv_ideation_id: Optional[str] = None
+    aiv_ideation_title: Optional[str] = None
     title: str
     description: str
     family: str
@@ -34,6 +36,7 @@ class CatalogAssetCreate(CatalogAssetBase):
 
 
 class CatalogAssetUpdate(BaseModel):
+    aiv_ideation_id: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
     family: Optional[str] = None
@@ -92,6 +95,8 @@ class CatalogAssetResponse(BaseModel):
     manager_name: Optional[str] = None
     manager_email: Optional[str] = None
     designation: Optional[str] = None
+    aiv_ideation_id: Optional[str] = None
+    aiv_ideation_title: Optional[str] = None
     clone_request_count: int = 0
     deployment_count: int = 0
     like_count: int = 0

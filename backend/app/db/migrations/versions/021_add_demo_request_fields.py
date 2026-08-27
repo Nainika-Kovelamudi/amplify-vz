@@ -16,10 +16,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("demo_requests", sa.Column("requester_email", sa.String(), nullable=True))
-    op.add_column("demo_requests", sa.Column("requester_name", sa.String(), nullable=True))
-    op.add_column("demo_requests", sa.Column("vertical", sa.String(), nullable=True))
-    op.add_column("demo_requests", sa.Column("additional_details", sa.Text(), nullable=True))
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("demo_requests")}
+    if "requester_email" not in columns:
+        op.add_column("demo_requests", sa.Column("requester_email", sa.String(), nullable=True))
+    if "requester_name" not in columns:
+        op.add_column("demo_requests", sa.Column("requester_name", sa.String(), nullable=True))
+    if "vertical" not in columns:
+        op.add_column("demo_requests", sa.Column("vertical", sa.String(), nullable=True))
+    if "additional_details" not in columns:
+        op.add_column("demo_requests", sa.Column("additional_details", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:

@@ -1,6 +1,6 @@
 import logging
 from functools import lru_cache
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -42,12 +42,29 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = Field(True, description="Use STARTTLS")
     smtp_from: str = Field("", description="From address shown to recipients")
     email_dev_override: str = Field("", description="Redirect ALL outbound mail to this address (local dev only)")
+    executive_report_schedule_enabled: bool = Field(False, description="Enable automatic executive report email")
+    executive_report_recipients: str = Field("", description="Comma-separated executive report recipients")
+    executive_report_interval_hours: int = Field(168, ge=1, description="Hours between automatic reports")
+    executive_report_days: int = Field(30, ge=7, le=365, description="Reporting period included in scheduled reports")
 
     # AI — Gemini (production) / Groq (local dev fallback)
     gemini_api_key: str = Field("", description="Google Gemini API key (production, preferred)")
     gemini_model: str = Field("", description="Gemini model used for AI scoring")
     groq_api_key: str = Field("", description="Groq API key (local dev fallback)")
     groq_model: str = Field("", description="Groq fallback model used for AI scoring")
+
+    # AI Intelligence Portal MongoDB integration (Azure environment settings only)
+    aiv_mongodb_url: str = Field(
+        "",
+        validation_alias=AliasChoices("AIV_MONGODB_URL", "MONGODB_URL"),
+        description="Read-only MongoDB URI for approved AIV ideations",
+    )
+    aiv_mongodb_db_name: str = Field(
+        "",
+        validation_alias=AliasChoices("AIV_MONGODB_DB_NAME", "MONGODB_DB_NAME"),
+        description="AIV MongoDB database name",
+    )
+    aiv_ideations_collection: str = Field("cic_pipeline", description="AIV approval-pipeline collection")
 
     # App
     debug: bool = Field(False)
@@ -76,6 +93,7 @@ async def load_secrets(settings: Settings) -> None:
         "email-connection-string": "email_connection_string",
         "gemini-api-key": "gemini_api_key",
         "groq-api-key": "groq_api_key",
+        "aiv-mongodb-url": "aiv_mongodb_url",
     }
 
     async with DefaultAzureCredential() as credential:
@@ -88,9 +106,6 @@ async def load_secrets(settings: Settings) -> None:
                         logger.debug("Loaded secret '%s' from Key Vault.", secret_name)
                 except Exception as exc:
                     logger.warning("Could not load secret '%s': %s", secret_name, exc)
-
-    get_settings.cache_clear()
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

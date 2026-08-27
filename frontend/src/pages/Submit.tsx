@@ -9,7 +9,8 @@ import {
 import { useFamilies } from '../context/FamiliesContext';
 import { DemoVideoDropzone } from '../components/media/DemoVideoDropzone';
 import { Button } from '../components/ui/Button';
-import { getSubmission, createSubmission, updateSubmission } from '../lib/submissionService';
+import { getSubmission, createSubmission, updateSubmission, getApprovedIdeations } from '../lib/submissionService';
+import type { ApprovedIdeation } from '../lib/submissionService';
 import { getCatalogAsset } from '../lib/catalogService';
 import { uploadMedia } from '../lib/mediaService';
 import { useAuth } from '../context/AuthContext';
@@ -50,6 +51,7 @@ const emptyFormData = {
   department: '',
   designation: '',
   // Section 2 — Asset
+  aiv_ideation_id: '',
   title: '',
   category: '',
   family: '',
@@ -81,6 +83,16 @@ const PROCESSING_STEPS = [
 ];
 
 const TERMINAL_STATUSES = ['Manual_Approval', 'Needs_Changes', 'Approved', 'Published', 'Archived'];
+const DESCRIPTION_WORD_LIMIT = 400;
+
+const countWords = (value: string) => value.trim() ? value.trim().split(/\s+/).length : 0;
+
+const limitWords = (value: string, limit: number) => {
+  const matches = [...value.matchAll(/\S+/g)];
+  if (matches.length <= limit) return value;
+  const finalWord = matches[limit - 1];
+  return value.slice(0, (finalWord.index ?? 0) + finalWord[0].length);
+};
 
 function SubmissionProcessing({ id, isRevision }: { id: string; isRevision: boolean }) {
   const navigate = useNavigate();
@@ -279,14 +291,32 @@ export function Submit() {
   const [searchParams] = useSearchParams();
   const revisionId  = searchParams.get('revision');
   const catalogEditId = searchParams.get('catalogEdit');
+  const isExistingAssetEdit = !!revisionId || !!catalogEditId;
   const [submittedId, setSubmittedId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [adminNotes, setAdminNotes] = useState('');
   const [formData, setFormData] = useState(emptyFormData);
+  const [approvedIdeations, setApprovedIdeations] = useState<ApprovedIdeation[]>([]);
+  const [ideationsLoading, setIdeationsLoading] = useState(true);
+  const [ideationsError, setIdeationsError] = useState('');
   const [techDraft, setTechDraft] = useState('');
   const [contributorDraft, setContributorDraft] = useState('');
   const [commandDraft, setCommandDraft] = useState('');
+
+  const loadIdeations = useCallback(async () => {
+    setIdeationsLoading(true);
+    setIdeationsError('');
+    try {
+      setApprovedIdeations(await getApprovedIdeations());
+    } catch (err) {
+      setIdeationsError(err instanceof Error ? err.message : 'Could not load AIV ideations.');
+    } finally {
+      setIdeationsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadIdeations(); }, [loadIdeations]);
 
   // Document slots for Section 4
   const DOC_SLOTS = [
@@ -410,6 +440,7 @@ export function Submit() {
         department:    asset.department ?? '',
         designation:   asset.designation ?? '',
         title:           asset.title ?? '',
+        aiv_ideation_id: asset.aiv_ideation_id ?? '',
         category:        asset.category ?? '',
         family:          asset.family ?? '',
         cloud_providers: (asset.cloud_provider ?? '').split(', ').filter(Boolean),
@@ -471,6 +502,7 @@ export function Submit() {
         department: sub.department,
         designation: (sub as any).designation ?? '',
         title: sub.title,
+        aiv_ideation_id: sub.aiv_ideation_id ?? '',
         category: (sub as any).category ?? '',
         family: sub.family,
         cloud_providers: ((sub.cloud_provider ?? '').split(', ').filter(Boolean)),
@@ -517,6 +549,7 @@ export function Submit() {
     setError('');
     try {
       const payload = {
+        aiv_ideation_id: formData.aiv_ideation_id,
         title: formData.title.trim(),
         description: formData.description.trim(),
         family: formData.family,
@@ -815,11 +848,13 @@ export function Submit() {
     formData.manager_email.trim().length > 0 &&
     formData.department.trim().length > 0 &&
     formData.designation.trim().length > 0 &&
+    (isExistingAssetEdit || formData.aiv_ideation_id.trim().length > 0) &&
     formData.family.trim().length > 0 &&
     formData.title.trim().length > 0 &&
     formData.category.trim().length > 0 &&
     formData.maturity.trim().length > 0 &&
     formData.description.trim().length > 0 &&
+    countWords(formData.description) <= DESCRIPTION_WORD_LIMIT &&
     formData.tech_stack.length > 0 &&
     formData.repo_url.trim().length > 0 &&
     formData.video_url.trim().length > 0 &&
@@ -1046,6 +1081,28 @@ export function Submit() {
             {/* ── SECTION 2 — Asset Details ──────────────────────────── */}
             <Section icon={<PackagePlus className="h-4 w-4" />} label="Section 2 — Asset Details">
               <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                <Field label="AIV Ideation" required={!isExistingAssetEdit} wide>
+                  <div className="flex gap-2">
+                    <select
+                      value={formData.aiv_ideation_id}
+                      onChange={(e) => setField('aiv_ideation_id', e.target.value)}
+                      className="field-input"
+                      required={!isExistingAssetEdit}
+                      disabled={ideationsLoading}
+                    >
+                      <option value="">{ideationsLoading ? 'Loading AIV ideations…' : 'Select an AIV ideation…'}</option>
+                      {approvedIdeations.map((idea) => (
+                        <option key={idea.id} value={idea.id}>{idea.id} — {idea.title}</option>
+                      ))}
+                      {formData.aiv_ideation_id && !approvedIdeations.some((idea) => idea.id === formData.aiv_ideation_id) && (
+                        <option value={formData.aiv_ideation_id}>{formData.aiv_ideation_id}</option>
+                      )}
+                    </select>
+                    {ideationsError && <Button type="button" variant="outline" onClick={() => void loadIdeations()}>Retry</Button>}
+                  </div>
+                  {ideationsError && <p className="mt-1 text-xs text-red-600">{ideationsError}</p>}
+                </Field>
+
                 <Field label="Asset Title" required>
                   <input
                     value={formData.title}
@@ -1251,15 +1308,20 @@ export function Submit() {
 
             {/* ── SECTION 3 — Description ────────────────────────────── */}
             <Section icon={<FileText className="h-4 w-4" />} label="Section 3 — Description">
-              <Field label="Full Description" required wide>
+              <Field label="Full Description" hint="Maximum 400 words" required wide>
                 <textarea
                   value={formData.description}
-                  onChange={(e) => setField('description', e.target.value)}
+                  onChange={(e) => setField('description', limitWords(e.target.value, DESCRIPTION_WORD_LIMIT))}
                   placeholder="What does it do? Which problems does it solve? What can delivery teams reuse?"
                   rows={6}
                   className="field-input resize-y"
                   required
                 />
+                <div className="mt-1.5 flex justify-end">
+                  <span className={`text-xs font-medium ${countWords(formData.description) >= DESCRIPTION_WORD_LIMIT ? 'text-amber-600' : 'text-gray-400'}`}>
+                    {countWords(formData.description)} / {DESCRIPTION_WORD_LIMIT} words
+                  </span>
+                </div>
               </Field>
             </Section>
 
@@ -1350,7 +1412,7 @@ export function Submit() {
             </div>
             {!isFormValid && (
               <p className="mt-2 text-xs text-gray-400">
-                Required: Owner Name, Owner Email, Manager Name, Manager Email, Department, Designation, Asset Title, Category, Description, Tech Stack, Repo URL, and Demo Video
+                Required: Owner Name, Owner Email, Manager Name, Manager Email, Department, Designation, {!isExistingAssetEdit && 'AIV Ideation, '}Asset Title, Category, Description, Tech Stack, Repo URL, and Demo Video
               </p>
             )}
           </form>

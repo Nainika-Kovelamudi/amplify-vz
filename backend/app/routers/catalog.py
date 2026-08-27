@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.db.models import ActivityLog, AssetStatus, CatalogAsset, UserProfile, UserRole
+from app.db.models import ActivityLog, AssetLike, AssetStatus, CatalogAsset, CloneRequest, CloneStatus, UserProfile, UserRole
 from app.deps.rbac import dept_check, get_current_user, require_role
 from app.schemas.catalog import (
     CatalogAssetCreate,
@@ -149,7 +149,7 @@ def _slugify(text: str) -> str:
     return re.sub(r"[\s_-]+", "-", slug).strip("-")
 
 
-def _to_response(asset: CatalogAsset, owner_name: str | None = None, clone_request_count: int = 0, deployment_count: int = 0, like_count: int = 0, liked_by_me: bool = False) -> CatalogAssetResponse:
+def _to_response(asset: CatalogAsset, owner_name: str | None = None, clone_request_count: int = 0, deployment_count: int = 0, like_count: int = 0, liked_by_me: bool = False, owner_email: str | None = None) -> CatalogAssetResponse:
     return CatalogAssetResponse(
         id=asset.id,
         catalog_code=asset.catalog_code,
@@ -177,8 +177,10 @@ def _to_response(asset: CatalogAsset, owner_name: str | None = None, clone_reque
         ai_feedback=asset.ai_feedback,
         owner_id=asset.owner_id,
         owner_name=asset.owner_name or owner_name,
-        owner_email=asset.owner_email,
+        owner_email=asset.owner_email or owner_email,
         manager_name=asset.manager_name,
+        aiv_ideation_id=asset.aiv_ideation_id,
+        aiv_ideation_title=asset.aiv_ideation_title,
         manager_email=asset.manager_email,
         designation=asset.designation,
         clone_request_count=clone_request_count,
@@ -224,8 +226,47 @@ async def list_catalog(
     count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
     total = count_result.scalar_one()
 
-    result = await db.execute(stmt.order_by(CatalogAsset.created_at.desc()).offset(skip).limit(limit))
-    items = [_to_response(a) for a in result.scalars().all()]
+    clone_count = (
+        select(func.count(CloneRequest.id))
+        .where(CloneRequest.asset_id == CatalogAsset.id)
+        .correlate(CatalogAsset)
+        .scalar_subquery()
+    )
+    deployment_count = (
+        select(func.count(CloneRequest.id))
+        .where(
+            CloneRequest.asset_id == CatalogAsset.id,
+            CloneRequest.purpose == "Customer Demo",
+            CloneRequest.status == CloneStatus.Approved,
+        )
+        .correlate(CatalogAsset)
+        .scalar_subquery()
+    )
+    like_count = (
+        select(func.count(AssetLike.id))
+        .where(AssetLike.asset_id == CatalogAsset.id)
+        .correlate(CatalogAsset)
+        .scalar_subquery()
+    )
+    enriched_stmt = stmt.outerjoin(UserProfile, CatalogAsset.owner_id == UserProfile.id).add_columns(
+        UserProfile.display_name.label("owner_display_name"),
+        UserProfile.email.label("owner_profile_email"),
+        clone_count.label("clone_count"),
+        deployment_count.label("deployment_count"),
+        like_count.label("like_count"),
+    )
+    result = await db.execute(enriched_stmt.order_by(CatalogAsset.created_at.desc()).offset(skip).limit(limit))
+    items = [
+        _to_response(
+            asset,
+            owner_name=owner_display_name,
+            owner_email=owner_profile_email,
+            clone_request_count=clones,
+            deployment_count=deployments,
+            like_count=likes,
+        )
+        for asset, owner_display_name, owner_profile_email, clones, deployments, likes in result.all()
+    ]
     return CatalogAssetListResponse(items=items, total=total)
 
 
