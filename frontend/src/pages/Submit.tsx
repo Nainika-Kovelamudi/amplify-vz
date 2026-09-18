@@ -6,7 +6,7 @@ import {
   FileDown, FileText, Sheet, X, Paperclip, User, FileType,
   Loader2, Brain, Sparkles, ArrowRight, AlertTriangle,
 } from 'lucide-react';
-import { useFamilies } from '../context/FamiliesContext';
+import { familyAction, useFamilies } from '../context/FamiliesContext';
 import { DemoVideoDropzone } from '../components/media/DemoVideoDropzone';
 import { Button } from '../components/ui/Button';
 import { getSubmission, createSubmission, updateSubmission, getApprovedIdeations } from '../lib/submissionService';
@@ -14,10 +14,13 @@ import type { ApprovedIdeation } from '../lib/submissionService';
 import { getCatalogAsset } from '../lib/catalogService';
 import { uploadMedia } from '../lib/mediaService';
 import { useAuth } from '../context/AuthContext';
+import { usePortalSettings } from '../context/PortalSettingsContext';
+import { getDirectorySubmitterProfile } from '../lib/graphProfileService';
 
 const CATEGORIES = [
   // AI & Data
   'AI & Machine Learning',
+  'Agentic AI',
   'AI SDLC & Prompt Engineering',
   'RAG & Context Engineering',
   'MLOps & Model Management',
@@ -26,6 +29,7 @@ const CATEGORIES = [
   // Engineering
   'Software Engineering',
   'Application Development',
+  'Application Support',
   'Cloud Native',
   'DevOps & Infrastructure',
   'Infrastructure & Managed AI Ops',
@@ -36,11 +40,32 @@ const CATEGORIES = [
   'Process Automation & RPA',
   // Observability
   'Observability',
+  'Governance',
   // Others
   'Others',
 ] as const;
 
 const maturityOptions = ['Experimental', 'Battle-Tested', 'Production'];
+
+const OTHER_CORPORATE_REPO_PREFIXES = [
+  'https://dev.azure.com/infovision/',
+  'https://infovision.visualstudio.com/',
+  'https://gitlab.infovision.com/',
+];
+const isCorporateRepoUrl = (value: string) => {
+  const normalized = value.trim().toLowerCase().replace(/\/$/, '');
+  try {
+    const url = new URL(normalized);
+    if (url.protocol === 'https:' && ['github.com', 'www.github.com'].includes(url.hostname)) {
+      const [organization, repository] = url.pathname.split('/').filter(Boolean);
+      const isCorporateOrganization = organization === 'infovision' || organization.startsWith('infovision-') || organization === 'ivl' || organization.startsWith('ivl-');
+      return Boolean(repository && isCorporateOrganization);
+    }
+  } catch {
+    return false;
+  }
+  return OTHER_CORPORATE_REPO_PREFIXES.some((prefix) => normalized.startsWith(prefix) && normalized.length > prefix.length);
+};
 
 const emptyFormData = {
   // Section 1 — Submitter
@@ -285,6 +310,7 @@ function SubmissionProcessing({ id, isRevision }: { id: string; isRevision: bool
 }
 
 export function Submit() {
+  const { banners } = usePortalSettings();
   const navigate = useNavigate();
   const { user } = useAuth();
   const { families, loading: familiesLoading } = useFamilies();
@@ -412,6 +438,9 @@ export function Submit() {
   const [templateUploading, setTemplateUploading] = useState(false);
   const [templateFileName, setTemplateFileName] = useState('');
   const [templateParsed, setTemplateParsed] = useState(false);
+  const [directoryProfileLoading, setDirectoryProfileLoading] = useState(false);
+  const [directoryProfileError, setDirectoryProfileError] = useState('');
+  const [directoryFields, setDirectoryFields] = useState({ manager: false, department: false, designation: false });
 
   // Pre-fill Section 1 from logged-in user (skip if draft restore is in progress)
   useEffect(() => {
@@ -423,6 +452,45 @@ export function Submit() {
         department: user.department ?? '',
       }));
     }
+  }, [user, revisionId, catalogEditId]);
+
+  // Enrich a new submission with authoritative Microsoft Entra directory data.
+  // Existing assets/revisions retain their recorded ownership metadata.
+  useEffect(() => {
+    if (!user || revisionId || catalogEditId || restoringRef.current) return;
+    let cancelled = false;
+    setDirectoryProfileLoading(true);
+    setDirectoryProfileError('');
+
+    getDirectorySubmitterProfile()
+      .then(({ user: directoryUser, manager }) => {
+        if (cancelled) return;
+        const ownerEmail = directoryUser.mail || directoryUser.userPrincipalName || user.email || '';
+        const managerEmail = manager?.mail || manager?.userPrincipalName || '';
+        setFormData((current) => ({
+          ...current,
+          owner_name: directoryUser.displayName || user.display_name || current.owner_name,
+          owner_email: ownerEmail,
+          designation: directoryUser.jobTitle || current.designation,
+          department: directoryUser.department || user.department || current.department,
+          manager_name: manager?.displayName || current.manager_name,
+          manager_email: managerEmail || current.manager_email,
+        }));
+        setDirectoryFields({
+          manager: Boolean(manager?.displayName && managerEmail),
+          department: Boolean(directoryUser.department),
+          designation: Boolean(directoryUser.jobTitle),
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[Submit] Unable to load Microsoft Graph profile:', err);
+          setDirectoryProfileError(err instanceof Error ? err.message : 'Directory profile could not be loaded.');
+        }
+      })
+      .finally(() => { if (!cancelled) setDirectoryProfileLoading(false); });
+
+    return () => { cancelled = true; };
   }, [user, revisionId, catalogEditId]);
 
   // Load catalog asset for editing (owner/admin editing a published asset)
@@ -856,7 +924,7 @@ export function Submit() {
     formData.description.trim().length > 0 &&
     countWords(formData.description) <= DESCRIPTION_WORD_LIMIT &&
     formData.tech_stack.length > 0 &&
-    formData.repo_url.trim().length > 0 &&
+    isCorporateRepoUrl(formData.repo_url) &&
     formData.video_url.trim().length > 0 &&
     !sectionAError
   );
@@ -945,14 +1013,14 @@ export function Submit() {
               <PackagePlus className="h-4 w-4" /> Contribution Intake
             </div>
             <h1 className="text-3xl font-bold tracking-tight">
-              {catalogEditId ? 'Edit Published Asset' : revisionId ? 'Revise Asset Submission' : 'Submit a New Asset'}
+              {catalogEditId ? 'Edit Published Asset' : revisionId ? 'Revise Asset Submission' : banners.submit.title}
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-300">
               {catalogEditId
                 ? 'Update asset details. Changes save directly to the catalog.'
                 : revisionId
                 ? 'Update the requested fields and resubmit for AI Review.'
-                : 'Capture the metadata required for AI review, manual approval, and catalog publishing.'}
+                : banners.submit.subtitle}
             </p>
           </div>
 
@@ -997,6 +1065,16 @@ export function Submit() {
 
             {/* ── SECTION 1 — Submitter Information ──────────────────── */}
             <Section icon={<User className="h-4 w-4" />} label="Section 1 — Submitter Information">
+              {directoryProfileLoading && (
+                <div className="mb-4 flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading your Microsoft directory profile…
+                </div>
+              )}
+              {directoryProfileError && (
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  Directory auto-fill was unavailable. Existing account values are retained; complete the remaining fields manually.
+                </div>
+              )}
               <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                 <Field label="Owner Name" required>
                   <input
@@ -1023,10 +1101,12 @@ export function Submit() {
                   <input
                     value={formData.manager_name}
                     onChange={(e) => setField('manager_name', e.target.value)}
+                    readOnly={directoryFields.manager}
                     placeholder="e.g. Rohini Sharma"
-                    className="field-input"
+                    className={`field-input ${directoryFields.manager ? 'cursor-not-allowed bg-gray-50 text-gray-500' : ''}`}
                     required
                   />
+                  {directoryFields.manager && <p className="mt-1 text-[11px] text-gray-400">Auto-filled from Microsoft Entra ID</p>}
                 </Field>
                 <Field label="Manager Email" required>
                   <input
@@ -1040,12 +1120,13 @@ export function Submit() {
                       const v = e.target.value.trim();
                       if (v && !v.includes('@')) setField('manager_email', `${v}@infovision.com`);
                     }}
+                    readOnly={directoryFields.manager}
                     placeholder="manager@infovision.com"
                     className={`field-input ${
                       formData.manager_email &&
                       !formData.manager_email.toLowerCase().endsWith('@infovision.com')
                         ? 'border-rose-400 focus:ring-rose-200'
-                        : ''
+                        : directoryFields.manager ? 'cursor-not-allowed bg-gray-50 text-gray-500' : ''
                     }`}
                     required
                   />
@@ -1061,19 +1142,25 @@ export function Submit() {
                   <input
                     value={formData.department}
                     onChange={(e) => setField('department', e.target.value)}
+                    readOnly={directoryFields.department}
                     placeholder="e.g. Digital Technology"
-                    className="field-input"
+                    className={`field-input ${directoryFields.department ? 'cursor-not-allowed bg-gray-50 text-gray-500' : ''}`}
                     required
                   />
+                  <p className="mt-1 text-[11px] text-gray-400">
+                    {directoryFields.department ? 'Auto-filled from Microsoft Entra ID' : 'Not available in the directory; enter your department'}
+                  </p>
                 </Field>
                 <Field label="Designation / Role" required>
                   <input
                     value={formData.designation}
                     onChange={(e) => setField('designation', e.target.value)}
+                    readOnly={directoryFields.designation}
                     placeholder="e.g. Senior Software Engineer"
-                    className="field-input"
+                    className={`field-input ${directoryFields.designation ? 'cursor-not-allowed bg-gray-50 text-gray-500' : ''}`}
                     required
                   />
+                  {directoryFields.designation && <p className="mt-1 text-[11px] text-gray-400">Auto-filled from Microsoft Entra ID</p>}
                 </Field>
               </div>
             </Section>
@@ -1085,7 +1172,15 @@ export function Submit() {
                   <div className="flex gap-2">
                     <select
                       value={formData.aiv_ideation_id}
-                      onChange={(e) => setField('aiv_ideation_id', e.target.value)}
+                      onChange={(e) => {
+                        const ideationId = e.target.value;
+                        const selected = approvedIdeations.find((idea) => idea.id === ideationId);
+                        setFormData((current) => ({
+                          ...current,
+                          aiv_ideation_id: ideationId,
+                          family: selected?.family && families[selected.family] ? selected.family : current.family,
+                        }));
+                      }}
                       className="field-input"
                       required={!isExistingAssetEdit}
                       disabled={ideationsLoading}
@@ -1139,10 +1234,14 @@ export function Submit() {
                     {familiesLoading
                       ? <option disabled>Loading families…</option>
                       : Object.entries(families).map(([k, f]) => (
-                          <option key={k} value={k}>{f.name} — {f.tagline}</option>
+                          <option key={k} value={k}>{f.name} — {familyAction(k)} {f.tagline}</option>
                         ))
                     }
+                    {(revisionId || catalogEditId) && formData.family && !families[formData.family] && (
+                      <option value={formData.family}>{formData.family} — legacy family (retain or realign)</option>
+                    )}
                   </select>
+                  {formData.aiv_ideation_id && <p className="mt-1 text-xs text-gray-500">Platform Family is populated from the selected AIV ideation when family alignment is available.</p>}
                 </Field>
 
                 <Field label="Cloud Provider" wide>
@@ -1216,14 +1315,15 @@ export function Submit() {
                   </div>
                 </Field>
 
-                <Field label="Repository URL" required hint="GitHub, GitLab, Bitbucket, or Azure DevOps — must be a real code repository">
+                <Field label="Repository URL" required hint="Provide an InfoVision corporate repository. GitHub organizations may be infovision, infovision-&lt;label&gt;, ivl, or ivl-&lt;label&gt;.">
                   <input
                     value={formData.repo_url}
                     onChange={(e) => setField('repo_url', e.target.value)}
-                    placeholder="https://github.com/org/repo"
-                    className="field-input"
+                    placeholder="https://github.com/infovision-ai/repository-name"
+                    className={`field-input ${formData.repo_url && !isCorporateRepoUrl(formData.repo_url) ? 'border-red-400 focus:border-red-500 focus:ring-red-100' : ''}`}
                     required
                   />
+                  {formData.repo_url && !isCorporateRepoUrl(formData.repo_url) && <p className="mt-1 text-xs font-medium text-red-600">Use a corporate URL such as https://github.com/infovision-platform/repository or https://github.com/ivl-team/repository.</p>}
                 </Field>
 
                 <Field label="Live Demo URL" hint="URL of the running live demo (e.g. hosted app, Streamlit, etc.)">
@@ -1287,7 +1387,7 @@ export function Submit() {
                   </div>
                 </Field>
 
-                <Field label="Demo Videos / Images" required wide hint="Upload one or more demo videos or images. The first item is used as the primary demo.">
+                <Field label="Demo Videos" required wide hint="Upload one or more videos. The first video is used as the primary demo.">
                   <div className="space-y-4">
                     {formData.video_urls.map((url, index) => <div key={`${url}-${index}`} className="rounded-xl border border-gray-200 p-3">
                       <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">{index === 0 ? 'Primary demo' : `Demo ${index + 1}`}</p>

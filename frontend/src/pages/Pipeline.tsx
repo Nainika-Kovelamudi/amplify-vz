@@ -51,6 +51,7 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
   );
 }
 import { defaultFamilyBadge, useFamilies } from '../context/FamiliesContext';
+import { usePortalSettings } from '../context/PortalSettingsContext';
 import { Button } from '../components/ui/Button';
 import {
   getMySubmissions, getAllSubmissions, publishSubmission, deleteSubmission,
@@ -612,6 +613,7 @@ function latestLogicalSubmissions(submissions: Submission[]): Submission[] {
 }
 
 export function Pipeline() {
+  const { banners } = usePortalSettings();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user, isLoading: authLoading } = useAuth();
@@ -1120,7 +1122,7 @@ export function Pipeline() {
       <div className="mx-auto w-full max-w-5xl px-4 py-8">
         <div className="flex items-center">
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight text-gray-900">Assets Pipeline</h1>
+            <div><h1 className="text-2xl font-bold tracking-tight text-gray-900">{banners.pipeline.title}</h1><p className="mt-1 text-xs text-gray-500">{banners.pipeline.subtitle}</p></div>
             {isOwner && (
               <span className="flex items-center gap-1 rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-bold text-indigo-700">
                 <Crown className="h-3 w-3" /> Owner

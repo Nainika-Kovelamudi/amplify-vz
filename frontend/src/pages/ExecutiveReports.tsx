@@ -4,6 +4,7 @@ import {
   Eye, FileCheck2, GitBranch, LogIn, Mail, RefreshCw, Rocket, RotateCcw, Send, Sparkles, Trophy, Users,
 } from 'lucide-react';
 import { downloadExecutiveReport, getExecutiveReport, sendExecutiveReportTestEmail, type ExecutiveReport, type ExecutiveReportFormat, type ReportBreakdown } from '../lib/adminService';
+import { usePortalSettings } from '../context/PortalSettingsContext';
 
 const STATUS_LABELS: Record<string, string> = {
   Submitted: 'AI Processing', Manual_Approval: 'Admin Review', Approved: 'Awaiting Publish',
@@ -68,6 +69,7 @@ function BreakdownTable({ title, rows }: { title: string; rows: ReportBreakdown[
 }
 
 export function ExecutiveReports() {
+  const { banners } = usePortalSettings();
   const [days, setDays] = useState(30);
   const [report, setReport] = useState<ExecutiveReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -125,8 +127,8 @@ export function ExecutiveReports() {
         <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="mb-1 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-indigo-500"><BarChart3 className="h-4 w-4" />Executive reporting</div>
-            <h1 className="text-2xl font-extrabold text-slate-900">Asset Governance & Adoption</h1>
-            <p className="mt-1 text-sm text-slate-500">Submission quality, approval throughput, publishing outcomes, and platform usage.</p>
+            <h1 className="text-2xl font-extrabold text-slate-900">{banners.executive.title}</h1>
+            <p className="mt-1 text-sm text-slate-500">{banners.executive.subtitle}</p>
           </div>
           <div className="flex items-center gap-2">
             <select value={days} onChange={e => setDays(Number(e.target.value))} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm">
@@ -157,8 +159,8 @@ export function ExecutiveReports() {
 
         <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-bold text-slate-800">Asset families</h2><p className="mb-4 mt-0.5 text-xs text-slate-400">Published assets grouped by the home dashboard families</p>
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
-            {(report?.family_assets ?? []).map((family, index) => <div key={family.name} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {(report?.family_assets ?? []).map((family, index) => <div key={family.name} className="min-w-0 rounded-xl border border-slate-100 bg-slate-50 p-4">
               <div className={`mb-3 h-1.5 rounded-full ${FAMILY_TONES[index % FAMILY_TONES.length]}`} /><p className="truncate text-xs font-bold text-slate-700">{family.name}</p>
               <div className="mt-2 flex items-end justify-between"><span className="text-2xl font-extrabold text-slate-900">{family.asset_count}</span><span className="text-[10px] font-bold text-slate-400">{Math.round(family.percentage)}%</span></div>
             </div>)}

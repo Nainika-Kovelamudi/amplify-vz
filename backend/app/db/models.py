@@ -443,6 +443,17 @@ class Notification(Base):
         return f"<Notification id={self.id} recipient_id={self.recipient_id} event_type={self.event_type!r}>"
 
 
+class PortalSetting(Base):
+    """Owner-managed portal content stored as JSON by stable setting key."""
+
+    __tablename__ = "portal_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class DemoRequest(Base):
     """Customer demo request raised by any user for a published catalog asset."""
 

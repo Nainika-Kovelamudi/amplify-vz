@@ -52,7 +52,9 @@ export interface PlatformFamily {
   department: string;
   tagline?: string;
   description?: string;
+  summary?: string;
   long_description?: string;
+  key_assets?: string[];
   use_cases?: string[];
   depends_on?: string[];
   enables?: string[];

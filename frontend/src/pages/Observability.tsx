@@ -10,6 +10,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { downloadObservabilityReport, getAdminStats, getAuditLogs, getUsers, exportAuditLogsUrl, type AdminStats, type AuditLog, type AppUser, type ExecutiveReportFormat } from '../lib/adminService';
 import { getCatalog, type CatalogAsset } from '../lib/catalogService';
+import { usePortalSettings } from '../context/PortalSettingsContext';
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-gray-100 ${className ?? ''}`} />;
@@ -101,6 +102,7 @@ function MiniBar({ value, max, color }: { value: number; max: number; color: str
 }
 
 export function Observability() {
+  const { banners } = usePortalSettings();
   const navigate = useNavigate();
   const { user } = useAuth();
 
@@ -285,9 +287,9 @@ export function Observability() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-indigo-500" /> Observability Dashboard
+              <BarChart3 className="h-5 w-5 text-indigo-500" /> {banners.observability.title}
             </h1>
-            <p className="text-xs text-gray-400 mt-0.5">Full platform traceability — user activity, asset engagement, and live event stream</p>
+            <p className="text-xs text-gray-400 mt-0.5">{banners.observability.subtitle}</p>
           </div>
           <div className="flex items-center gap-2">
             <select

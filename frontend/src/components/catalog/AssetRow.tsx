@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { defaultFamilyBadge, useFamilies } from '../../context/FamiliesContext';
+import { defaultFamilyBadge, familyAction, useFamilies } from '../../context/FamiliesContext';
 import { CC, CL, MC, ML } from '../../data/uiConstants';
 import { ArrowRight } from 'lucide-react';
 import type { CatalogAsset } from '../../lib/catalogService';
@@ -39,7 +39,7 @@ export function AssetRow({ asset, index }: AssetRowProps) {
       </div>
 
       <span className="shrink-0 whitespace-nowrap text-[10px] font-bold uppercase tracking-wider" style={{ color: fm.color }}>
-        {fm.name}
+        {fm.name} — {familyAction(asset.family)}
       </span>
 
       <div className="shrink-0 flex gap-1 justify-end">

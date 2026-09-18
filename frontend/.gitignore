@@ -1,0 +1,51 @@
+﻿# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+dist-ssr/
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.*
+
+# Deployment archives and generated packages
+*.zip
+dist_prod*/
+
+# Python caches and generated QA artifacts
+__pycache__/
+*.py[cod]
+_qa_*
+soffice_*/
+
+# Local assistant/editor work files
+.claude/
+*agents_dump.txt
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript cache
+*.tsbuildinfo

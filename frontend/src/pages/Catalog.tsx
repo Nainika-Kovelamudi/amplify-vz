@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button';
 import { Download, LayoutGrid, List, SearchX } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { getCatalog, type CatalogAsset } from '../lib/catalogService';
+import { usePortalSettings } from '../context/PortalSettingsContext';
 import { useAuth } from '../context/AuthContext';
 
 const CC: Record<string, string> = { aws: '#FF9900', gcp: '#4285F4', azure: '#0078D4' };
@@ -15,6 +16,7 @@ const CL: Record<string, string> = { aws: 'AWS', gcp: 'GCP', azure: 'Azure' };
 const ML: Record<string, string> = { Experimental: 'Experimental', 'Battle-Tested': 'Battle-Tested', Production: 'Production' };
 
 export function Catalog() {
+  const { banners } = usePortalSettings();
   const { user } = useAuth();
   const canDownload = user?.role === 'Aimplify.Admin' || user?.role === 'Aimplify.Owner';
   const { families } = useFamilies();
@@ -23,11 +25,8 @@ export function Catalog() {
   const [assets, setAssets] = useState<CatalogAsset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [familyFilter, setFamilyFilter] = useState('all');
-  const [cloudFilters, setCloudFilters] = useState<string[]>([]);
-  const [maturityFilters, setMaturityFilters] = useState<string[]>(() => {
-    const m = searchParams.get('maturity');
-    return m ? [m] : [];
-  });
+  const [cloudFilter, setCloudFilter] = useState('');
+  const [maturityFilter, setMaturityFilter] = useState(() => searchParams.get('maturity') || '');
   const [demoReady, setDemoReady] = useState(() => searchParams.get('demo') === 'true');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [isDownloading, setIsDownloading] = useState(false);
@@ -40,8 +39,8 @@ export function Catalog() {
     return () => { cancelled = true; };
   }, []);
 
-  const toggleCloud = (c: string) => setCloudFilters((prev) => prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]);
-  const toggleMaturity = (m: string) => setMaturityFilters((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]);
+  const toggleCloud = (cloud: string) => setCloudFilter((current) => current === cloud ? '' : cloud);
+  const toggleMaturity = (maturity: string) => setMaturityFilter((current) => current === maturity ? '' : maturity);
 
   const downloadCatalogCsv = async () => {
     setIsDownloading(true);
@@ -132,15 +131,15 @@ export function Catalog() {
 
   const filteredAssets = useMemo(() => assets.filter((a) => {
     if (familyFilter !== 'all' && a.family !== familyFilter) return false;
-    if (cloudFilters.length && !cloudFilters.some((c) => a.cloud_provider?.toLowerCase().includes(c))) return false;
-    if (maturityFilters.length && !maturityFilters.includes(a.maturity ?? '')) return false;
+    if (cloudFilter && !a.cloud_provider?.toLowerCase().includes(cloudFilter)) return false;
+    if (maturityFilter && a.maturity !== maturityFilter) return false;
     if (demoReady && !a.demo_ready) return false;
     if (query) {
       const s = query.toLowerCase();
       return a.title.toLowerCase().includes(s) || a.description.toLowerCase().includes(s) || a.catalog_code.toLowerCase().includes(s);
     }
     return true;
-  }), [assets, familyFilter, cloudFilters, maturityFilters, demoReady, query]);
+  }), [assets, familyFilter, cloudFilter, maturityFilter, demoReady, query]);
 
   const FilterChip = ({ active, onClick, color, dot, children }: { active: boolean; onClick: () => void; color: string; dot?: boolean; children: React.ReactNode }) => (
     <button
@@ -163,8 +162,8 @@ export function Catalog() {
     <div className="animate-in fade-in duration-500 pb-12">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 px-4 py-8 md:px-10">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Asset Catalog</h1>
-          <p className="mt-1 text-sm text-gray-500">{isLoading ? 'Loading assets...' : `${filteredAssets.length} of ${assets.length} assets`}</p>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900">{banners.catalog.title}</h1>
+          <p className="mt-1 text-sm text-gray-500">{banners.catalog.subtitle} {!isLoading && `· ${filteredAssets.length} of ${assets.length} assets`}</p>
         </div>
         <div className="flex items-center gap-3">
           {canDownload && (
@@ -191,7 +190,7 @@ export function Catalog() {
         ))}
         <div className="h-6 w-px bg-gray-200 mx-1" />
         {['aws', 'gcp', 'azure'].map((c) => (
-          <FilterChip key={c} active={cloudFilters.includes(c)} onClick={() => toggleCloud(c)} color={CC[c]} dot>{CL[c]}</FilterChip>
+          <FilterChip key={c} active={cloudFilter === c} onClick={() => toggleCloud(c)} color={CC[c]} dot>{CL[c]}</FilterChip>
         ))}
         <div className="h-6 w-px bg-gray-200 mx-1" />
         {([
@@ -199,12 +198,12 @@ export function Catalog() {
           { label: 'Battle-Tested', color: '#0EA5E9' },
           { label: 'Production',    color: '#10B981' },
         ] as const).map(({ label, color }) => (
-          <FilterChip key={label} active={maturityFilters.includes(label)} onClick={() => toggleMaturity(label)} color={color}>{label}</FilterChip>
+          <FilterChip key={label} active={maturityFilter === label} onClick={() => toggleMaturity(label)} color={color}>{label}</FilterChip>
         ))}
         <div className="h-6 w-px bg-gray-200 mx-1" />
         <FilterChip active={demoReady} onClick={() => setDemoReady(!demoReady)} color="#22C55E">Demo Ready</FilterChip>
-        {(cloudFilters.length > 0 || maturityFilters.length > 0 || demoReady || familyFilter !== 'all' || query) && (
-          <button onClick={() => { setCloudFilters([]); setMaturityFilters([]); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }} className="ml-2 text-xs font-medium text-gray-500 hover:text-gray-900 underline underline-offset-2">
+        {(cloudFilter || maturityFilter || demoReady || familyFilter !== 'all' || query) && (
+          <button onClick={() => { setCloudFilter(''); setMaturityFilter(''); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }} className="ml-2 text-xs font-medium text-gray-500 hover:text-gray-900 underline underline-offset-2">
             Clear all
           </button>
         )}
@@ -218,7 +217,7 @@ export function Catalog() {
             <SearchX className="mb-4 h-12 w-12 text-gray-300" />
             <h3 className="text-lg font-bold text-gray-900">No matching assets found</h3>
             <p className="mt-1 text-sm text-gray-500">Try adjusting your filters or search query.</p>
-            <Button variant="outline" className="mt-6" onClick={() => { setCloudFilters([]); setMaturityFilters([]); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }}>
+            <Button variant="outline" className="mt-6" onClick={() => { setCloudFilter(''); setMaturityFilter(''); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }}>
               Clear filters
             </Button>
           </div>

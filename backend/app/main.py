@@ -11,6 +11,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from starlette.formparsers import MultiPartParser
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -35,6 +36,7 @@ from app.routers import (
     integrations,
     media,
     notifications,
+    portal_settings,
     submissions,
     users,
 )
@@ -148,13 +150,34 @@ def create_app() -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
         print(f"[VALIDATION_ERROR] {request.method} {request.url.path} — {exc.errors()}", flush=True)
-        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+        # Pydantic may place the original ValueError instance in error.ctx.
+        # That object is not JSON serializable and previously turned a valid
+        # 422 response into an unhandled 500 response.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": jsonable_encoder(
+                    exc.errors(),
+                    custom_encoder={ValueError: str},
+                )
+            },
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(request: Request, exc: StarletteHTTPException):
         if exc.status_code < 500:
             print(f"[HTTP_ERROR] {request.method} {request.url.path} → {exc.status_code}: {exc.detail}", flush=True)
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(Exception)
+    async def unexpected_error_handler(request: Request, exc: Exception):
+        # Returning the error through FastAPI keeps the response inside the
+        # middleware stack, including CORS, while the full cause stays in logs.
+        logger.exception("Unhandled API error: %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "The server could not complete the request. Check the backend logs for the recorded exception."},
+        )
 
     app.include_router(auth.router)
     app.include_router(catalog.router)
@@ -169,6 +192,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(media.router)
     app.include_router(notifications.router)
+    app.include_router(portal_settings.router)
     app.include_router(integrations.router)
 
     app.add_api_websocket_route("/ws/notifications", websocket_notifications_endpoint)

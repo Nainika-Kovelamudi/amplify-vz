@@ -26,17 +26,21 @@ async def push_notification(
     All errors are swallowed so callers are never affected.
     """
     try:
-        notif = Notification(
-            id=uuid.uuid4(),
-            recipient_id=uuid.UUID(str(recipient_id)),
-            title=title,
-            body=body,
-            event_type=event_type,
-            entity_id=uuid.UUID(str(entity_id)) if entity_id else None,
-            read=False,
-        )
-        db.add(notif)
-        await db.flush()
+        # Keep a notification persistence failure from poisoning the caller's
+        # transaction. This is especially important for submission creation:
+        # notifications are optional, while the submission itself is not.
+        async with db.begin_nested():
+            notif = Notification(
+                id=uuid.uuid4(),
+                recipient_id=uuid.UUID(str(recipient_id)),
+                title=title,
+                body=body,
+                event_type=event_type,
+                entity_id=uuid.UUID(str(entity_id)) if entity_id else None,
+                read=False,
+            )
+            db.add(notif)
+            await db.flush()
 
         await ws_manager.send_to_user(str(recipient_id), {
             "event": event_type,

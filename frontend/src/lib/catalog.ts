@@ -32,7 +32,7 @@ type AssetRow = {
   updated_at?: string;
 };
 
-export type CatalogFamily = 'atlas' | 'forge' | 'relay' | 'sentinel' | 'nexus';
+export type CatalogFamily = 'forge' | 'atlas' | 'sentinel' | 'titan';
 export type CatalogCloud = 'aws' | 'gcp' | 'azure';
 export type CatalogMaturity = 'Experimental' | 'Battle-Tested' | 'Production';
 export type CatalogEffort = 'low' | 'medium' | 'high';
@@ -422,19 +422,18 @@ function familyPrefix(family: string) {
   const prefixes: Record<string, string> = {
     atlas: 'ATL',
     forge: 'FRG',
-    relay: 'RLY',
+    titan: 'TIT',
     sentinel: 'SEN',
-    nexus: 'NXS',
   };
   return prefixes[family] ?? 'AST';
 }
 
 function normalizeFamily(value: string): CatalogFamily {
   const family = value.toLowerCase();
-  if (family === 'atlas' || family === 'forge' || family === 'relay' || family === 'sentinel' || family === 'nexus') {
+  if (family === 'atlas' || family === 'forge' || family === 'titan' || family === 'sentinel') {
     return family;
   }
-  return 'relay';
+  return 'titan';
 }
 
 function normalizeMaturity(value: string): CatalogMaturity {

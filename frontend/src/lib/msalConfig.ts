@@ -26,7 +26,11 @@ export const msalConfig: Configuration = {
 };
 
 export const loginRequest = {
-  scopes: ['openid', 'profile', 'email', `api://${clientId}/access_as_user`],
+  // The backend login exchanges the ID token, while the submission form uses
+  // the Microsoft Graph access token to read the signed-in user's directory
+  // profile. Request Graph User.Read during SSO so acquireTokenSilent can reuse
+  // it later without prompting from inside the form.
+  scopes: ['openid', 'profile', 'email', 'User.Read'],
 };
 
 export const msalInstance = new PublicClientApplication(msalConfig);

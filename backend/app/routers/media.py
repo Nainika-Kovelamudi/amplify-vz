@@ -244,6 +244,7 @@ async def download_template(
 # ── shared option lists ────────────────────────────────────────────────────
 _CATEGORIES = [
     "AI & Machine Learning",
+    "Agentic AI",
     "AI SDLC & Prompt Engineering",
     "RAG & Context Engineering",
     "MLOps & Model Management",
@@ -251,6 +252,7 @@ _CATEGORIES = [
     "Data & Analytics",
     "Software Engineering",
     "Application Development",
+    "Application Support",
     "Cloud Native",
     "DevOps & Infrastructure",
     "Infrastructure & Managed AI Ops",
@@ -258,15 +260,14 @@ _CATEGORIES = [
     "Security & Compliance",
     "Process Automation & RPA",
     "Observability",
+    "Governance",
     "Others",
 ]
 _FAMILIES  = [
-    "Atlas — DataOps & Master Data",
-    "Forge — Software Engineering & DevOps",
-    "Sentinel — Quality & Security",
-    "Relay — Integration & API Management",
-    "Nexus — Infrastructure & Managed AI Ops",
-    "Others",
+    "Forge — AI Engineering & Development",
+    "Atlas — AI Foundation & Platform",
+    "Sentinel — AI Security, Risk & Governance",
+    "Titan — Agentic Automation & Functional AI",
 ]
 _CLOUDS    = ["AWS", "Azure", "GCP", "Multi-cloud", "On-prem"]
 _MATURITIES = ["Experimental", "Battle-Tested", "Production"]

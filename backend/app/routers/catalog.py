@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.db.models import ActivityLog, AssetLike, AssetStatus, CatalogAsset, CloneRequest, CloneStatus, UserProfile, UserRole
+from app.db.models import ActivityLog, AssetLike, AssetStatus, CatalogAsset, CloneRequest, CloneStatus, PortalSetting, UserProfile, UserRole
 from app.deps.rbac import dept_check, get_current_user, require_role
 from app.schemas.catalog import (
     CatalogAssetCreate,
@@ -20,25 +20,38 @@ from app.schemas.catalog import (
     CatalogAssetUpdate,
     PlatformFamilyResponse,
 )
+from app.services.catalog_code_service import next_catalog_code
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Catalog"])
 
-FAMILIES = ["Atlas", "Forge", "Sentinel", "Relay", "Nexus"]
+FAMILIES = ["Atlas", "Forge", "Titan", "Sentinel"]
 FAMILY_META: dict[str, dict] = {
+    "Titan": {
+        "color": "#5B35CC",
+        "tagline": "Agentic Automation & Functional AI",
+        "department": "enterprise_ai",
+        "description": "Agentic Automation & Functional AI",
+        "summary": "TITAN puts AI to work through intelligent agents, automated workflows and AI-powered business operations.",
+        "long_description": "TITAN is the execution and business-value layer of AIMPLIFY. It transforms AI capabilities into autonomous and semi-autonomous digital workers that can reason, make decisions, orchestrate workflows and execute business processes across enterprise systems.",
+        "key_assets": ["Agents", "Workflows", "Process Automation", "Functional AI", "Digital Workers", "Business Operations"],
+        "use_cases": [
+            "Enterprise AI platform foundations and reference architectures",
+            "Cross-business AI transformation and adoption patterns",
+            "Governed integration and orchestration of AI services",
+            "Reusable operating models for scaling AI into production",
+        ],
+        "depends_on": ["Enterprise architecture and cloud foundation", "Security and governance standards"],
+        "enables": ["Forge", "Atlas", "Sentinel"],
+    },
     "Atlas": {
-        "color": "#3B82F6",
-        "tagline": "DataOps & Master Data",
+        "color": "#147FE6",
+        "tagline": "AI Foundation & Platform",
         "department": "dataops",
-        "description": "Data pipelines, master data management, and analytics accelerators.",
-        "long_description": (
-            "Atlas is InfoVision's DataOps and Master Data family — a curated set of "
-            "reusable accelerators for building, testing, and operating data pipelines at scale. "
-            "From ingestion and quality rules to MDM patterns and lakehouse templates, Atlas "
-            "assets help delivery teams stand up reliable, observable data platforms faster. "
-            "Every Atlas asset is designed to connect cleanly with cloud-native storage and "
-            "orchestration services so teams spend less time plumbing and more time building insight."
-        ),
+        "description": "AI Foundation & Platform",
+        "summary": "ATLAS provides the data, models, knowledge, platform and infrastructure that power enterprise AI.",
+        "long_description": "ATLAS is the foundational layer of AIMPLIFY, providing the technology ecosystem required to build and operate enterprise AI at scale. It brings together AI infrastructure, data, models, knowledge, compute, platforms and reusable services into a scalable and composable AI foundation.",
+        "key_assets": ["AI Foundation", "Data", "Models", "Knowledge", "Platform", "Infrastructure"],
         "use_cases": [
             "Building cloud-native data pipelines (Azure Data Factory, AWS Glue, GCP Dataflow)",
             "Master data management and golden-record reconciliation",
@@ -47,21 +60,16 @@ FAMILY_META: dict[str, dict] = {
             "Real-time streaming and CDC pipelines",
         ],
         "depends_on": ["Cloud storage account (ADLS Gen2 / S3 / GCS)", "Orchestration service (ADF / Airflow / Step Functions)"],
-        "enables": ["Forge (AI/ML feature stores)", "Nexus (DataOps observability dashboards)"],
+        "enables": ["Forge (AI/ML feature stores)", "Titan (AI execution and automation)"],
     },
     "Forge": {
-        "color": "#8B5CF6",
-        "tagline": "AI SDLC & Prompt Engineering",
+        "color": "#F05A0A",
+        "tagline": "AI Engineering & Development",
         "department": "ai_sdlc",
-        "description": "LLM toolchains, RAG frameworks, and AI-assisted SDLC accelerators.",
-        "long_description": (
-            "Forge is the AI SDLC and Prompt Engineering family — the engine room for building "
-            "production-grade GenAI solutions. It houses RAG pipelines, prompt-management "
-            "frameworks, fine-tuning templates, AI code-review agents, and evaluation harnesses. "
-            "Whether a team is integrating an LLM into an existing product or building a "
-            "greenfield AI application, Forge accelerators provide battle-tested patterns that "
-            "reduce time-to-POC and time-to-production for GenAI workloads."
-        ),
+        "description": "AI Engineering & Development",
+        "summary": "Forge builds, engineers and operationalizes AI solutions from idea to production.",
+        "long_description": "FORGE is the AI engineering and development family within AIMPLIFY, enabling organizations to design, build, test, deploy and continuously improve AI-powered solutions. It provides the engineering capabilities required across the AI Software Development Lifecycle, from experimentation and prototyping through production deployment and evolution.",
+        "key_assets": ["AI Engineering", "AI Development", "AI SDLC", "GenAI", "Agentic AI", "AI Applications"],
         "use_cases": [
             "Retrieval-Augmented Generation (RAG) pipelines with vector search",
             "LLM prompt management and versioning systems",
@@ -70,21 +78,16 @@ FAMILY_META: dict[str, dict] = {
             "Multi-agent orchestration frameworks (LangChain, AutoGen, CrewAI)",
         ],
         "depends_on": ["LLM API (Azure OpenAI / AWS Bedrock / GCP Vertex AI)", "Vector store (Pinecone / Qdrant / pgvector)"],
-        "enables": ["Atlas (knowledge base ingestion)", "Sentinel (AI security scanning)", "Relay (AI-driven automation)"],
+        "enables": ["Atlas (knowledge base ingestion)", "Sentinel (AI security scanning)", "Titan (AI-driven automation)"],
     },
     "Sentinel": {
-        "color": "#EF4444",
-        "tagline": "Security & Compliance",
+        "color": "#07885C",
+        "tagline": "AI Security, Risk & Governance",
         "department": "security",
-        "description": "Security scanning, compliance automation, and zero-trust access accelerators.",
-        "long_description": (
-            "Sentinel is InfoVision's Security and Compliance family — a library of accelerators "
-            "for embedding security and regulatory compliance into every layer of the delivery "
-            "pipeline. It covers SAST/DAST integrations, IAM policy templates, zero-trust network "
-            "patterns, audit-log frameworks, and compliance-as-code modules for SOC 2, ISO 27001, "
-            "HIPAA, and GDPR. Sentinel assets are designed to be plugged into existing CI/CD "
-            "pipelines and infrastructure-as-code repositories with minimal configuration."
-        ),
+        "description": "AI Security, Risk & Governance",
+        "summary": "SENTINEL secures, governs, monitors and assures AI across its entire lifecycle.",
+        "long_description": "SENTINEL is AIMPLIFY's AI Trust, Security and Governance family, designed to protect AI systems from emerging threats while ensuring responsible, compliant and controlled AI adoption. It provides continuous security, risk management, governance, guardrails and observability across models, agents, applications and AI workflows.",
+        "key_assets": ["AI Security", "Red Team", "Guardrails", "Observability", "Risk", "Compliance", "Governance"],
         "use_cases": [
             "Automated SAST/DAST pipeline integrations (Snyk, Checkmarx, OWASP ZAP)",
             "Zero-trust network and identity policy templates",
@@ -93,55 +96,29 @@ FAMILY_META: dict[str, dict] = {
             "Audit logging and forensic evidence collection frameworks",
         ],
         "depends_on": ["IAM provider (Azure AD / AWS IAM / GCP IAM)", "CI/CD platform (GitHub Actions / Azure DevOps / Jenkins)"],
-        "enables": ["Relay (secure workflow automation)", "Nexus (compliance monitoring dashboards)"],
-    },
-    "Relay": {
-        "color": "#F59E0B",
-        "tagline": "Process Automation & QE",
-        "department": "automation",
-        "description": "RPA bots, test automation frameworks, and intelligent workflow accelerators.",
-        "long_description": (
-            "Relay is the Process Automation and Quality Engineering family — connecting people, "
-            "systems, and data through intelligent automation. It includes RPA accelerators, "
-            "API-integration templates, test-automation frameworks (Selenium, Playwright, Cypress), "
-            "BDD scaffolding, and low-code workflow builders. Relay assets help teams eliminate "
-            "repetitive manual work, accelerate QA cycles, and build resilient end-to-end "
-            "automation that survives UI and API changes."
-        ),
-        "use_cases": [
-            "RPA bots for ERP, HRMS, and back-office processes (UiPath, Power Automate, Blue Prism)",
-            "End-to-end test automation suites (Playwright, Selenium, Cypress)",
-            "BDD test frameworks and living-documentation generators",
-            "API integration and event-driven workflow templates",
-            "Intelligent document processing (IDP) pipelines",
-        ],
-        "depends_on": ["Target application / API surface", "Test environment or sandbox"],
-        "enables": ["Forge (automated QA for AI outputs)", "Sentinel (compliance test suites)"],
-    },
-    "Nexus": {
-        "color": "#10B981",
-        "tagline": "Infrastructure & Managed AI Ops",
-        "department": "infra",
-        "description": "IaC modules, MLOps pipelines, and cloud cost-optimisation accelerators.",
-        "long_description": (
-            "Nexus is the Infrastructure and Managed AI Ops family — the platform foundation that "
-            "everything else runs on. It provides Terraform and Bicep modules for provisioning "
-            "cloud environments, Kubernetes Helm charts, MLOps pipeline templates (Azure ML, "
-            "SageMaker, Vertex AI), FinOps dashboards, and observability stacks. Nexus assets "
-            "give delivery teams a reproducible, cost-optimised, and observable infrastructure "
-            "baseline so they can focus on value delivery rather than undifferentiated heavy lifting."
-        ),
-        "use_cases": [
-            "Infrastructure-as-Code templates (Terraform, Bicep, Pulumi, CDK)",
-            "Kubernetes Helm charts and GitOps workflows (ArgoCD, Flux)",
-            "MLOps pipelines and model registry integrations",
-            "Cloud cost visibility, tagging governance, and FinOps dashboards",
-            "Centralised observability stacks (OpenTelemetry, Grafana, Datadog)",
-        ],
-        "depends_on": ["Cloud subscription (Azure / AWS / GCP)", "Container registry"],
-        "enables": ["All families (shared infrastructure baseline)"],
+        "enables": ["Titan (secure workflow automation and governance monitoring)"],
     },
 }
+
+
+def default_portal_content() -> dict:
+    return {
+        "aiv_portal_name": "AIV Intelligence Portal",
+        "aiv_portal_description": "Access InfoVision's AI intelligence hub for insights, tools, and resources",
+        "aiv_portal_url": "https://aivportal.infovision.ai/",
+        "banners": {
+            "home": {"title": "AIMPLIFY", "subtitle": "One platform for discovering, reusing, and deploying proven AI accelerators."},
+            "login": {"title": "AIMPLIFY", "subtitle": "AI Management for Process Lifecycle, Intelligence, Flow & Yield"},
+            "catalog": {"title": "Asset Catalog", "subtitle": "Discover reusable, approved AI assets across the FAST platform families."},
+            "pipeline": {"title": "Assets Pipeline", "subtitle": "Track submissions, reviews, requests, and publishing activity."},
+            "submit": {"title": "Submit a New Asset", "subtitle": "Share a reusable AI capability for evaluation and publication."},
+            "why": {"title": "Why AIMPLIFY?", "subtitle": "The platform that turns collective intelligence into company advantage."},
+            "observability": {"title": "Observability Dashboard", "subtitle": "Monitor platform activity, governance, adoption, and engagement."},
+            "executive": {"title": "Asset Governance & Adoption", "subtitle": "Executive reporting across AIMPLIFY performance and outcomes."},
+        },
+        "families": [dict(id=name, name=name, **FAMILY_META[name]) for name in FAMILIES],
+        "family_order": FAMILIES.copy(),
+    }
 
 
 def _slugify(text: str) -> str:
@@ -273,7 +250,14 @@ async def list_catalog(
 @router.get("/catalog/families", response_model=list[PlatformFamilyResponse])
 async def list_families(db: AsyncSession = Depends(get_db)) -> list[PlatformFamilyResponse]:
     responses = []
-    for family_name, meta in FAMILY_META.items():
+    setting = (await db.execute(select(PortalSetting).where(PortalSetting.key == "portal_content"))).scalar_one_or_none()
+    configured = (setting.value or {}).get("families", []) if setting else []
+    configured_by_id = {item.get("id"): item for item in configured if item.get("id") in FAMILIES}
+    requested_order = (setting.value or {}).get("family_order", FAMILIES) if setting else FAMILIES
+    family_order = [name for name in requested_order if name in FAMILIES]
+    family_order.extend(name for name in FAMILIES if name not in family_order)
+    for family_name in family_order:
+        meta = {**FAMILY_META[family_name], **configured_by_id.get(family_name, {})}
         count_result = await db.execute(
             select(func.count()).where(
                 CatalogAsset.family == family_name,
@@ -288,7 +272,9 @@ async def list_families(db: AsyncSession = Depends(get_db)) -> list[PlatformFami
                 tagline=meta["tagline"],
                 department=meta["department"],
                 description=meta.get("description"),
+                summary=meta.get("summary"),
                 long_description=meta.get("long_description"),
+                key_assets=meta.get("key_assets", []),
                 use_cases=meta.get("use_cases", []),
                 depends_on=meta.get("depends_on", []),
                 enables=meta.get("enables", []),
@@ -364,8 +350,7 @@ async def create_catalog_asset(
     from app.services.orchestrator import run_scoring_pipeline
 
     slug = _slugify(body.title)
-    family_prefix = body.family[:3].upper()
-    catalog_code = f"{family_prefix}-{uuid.uuid4().hex[:6].upper()}"
+    catalog_code = await next_catalog_code(db, body.family)
 
     asset = CatalogAsset(
         catalog_code=catalog_code,

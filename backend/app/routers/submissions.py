@@ -16,6 +16,7 @@ from app.schemas.submission import (
     SubmissionResponse,
     SubmissionUpdate,
 )
+from app.services.catalog_code_service import next_catalog_code
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
@@ -73,17 +74,21 @@ async def create_submission(
 
     ideation_id = body.aiv_ideation_id.strip() if body.aiv_ideation_id else ""
     ideation: dict | None = None
-    if ideation_id:
-        ideation = await require_approved_ideation(ideation_id)
-    elif body.catalog_asset_id:
+    if body.catalog_asset_id:
         existing_asset = (await db.execute(
             select(CatalogAsset).where(CatalogAsset.id == body.catalog_asset_id)
         )).scalars().first()
-        if existing_asset and existing_asset.aiv_ideation_id:
+        if not existing_asset:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The asset being edited was not found.")
+        if existing_asset.aiv_ideation_id:
             ideation = {
                 "id": existing_asset.aiv_ideation_id,
                 "title": existing_asset.aiv_ideation_title,
             }
+        elif ideation_id:
+            ideation = await require_approved_ideation(ideation_id)
+    elif ideation_id:
+        ideation = await require_approved_ideation(ideation_id)
     else:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="AIV Ideation is required for a new asset.")
 
@@ -550,9 +555,9 @@ async def publish_submission(
         existing_asset.status = AssetStatus.Published
         asset = existing_asset
     else:
-        family_prefix = sub.family[:3].upper()
+        catalog_code = await next_catalog_code(db, sub.family)
         asset = CatalogAsset(
-            catalog_code=f"{family_prefix}-{_uuid.uuid4().hex[:6].upper()}",
+            catalog_code=catalog_code,
             slug=slug,
             title=sub.title,
             description=sub.description or "",

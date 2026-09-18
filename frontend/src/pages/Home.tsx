@@ -5,16 +5,19 @@ import {
   ArrowRight, Activity, LayoutGrid, GitBranch, CheckCircle2,
   Clock, Zap, TrendingUp, FileText, Package, BookOpen,
   ChevronRight, Star, Layers, Sparkles, ShieldCheck, ExternalLink,
-  Database, Wand2, ShieldAlert, GitMerge, Server, PlayCircle, Rocket, FlaskConical,
+  PlayCircle, Rocket, FlaskConical,
   Eye, Download, Flame,
 } from 'lucide-react';
-import { defaultFamilyBadge, useFamilies } from '../context/FamiliesContext';
+import { defaultFamilyBadge, familyAction, useFamilies } from '../context/FamiliesContext';
 import { useAuth } from '../context/AuthContext';
 import { getCatalog, type CatalogAsset } from '../lib/catalogService';
 import { getMySubmissions, type Submission } from '../lib/submissionService';
 import { getRecentActivity, type ActivityEvent } from '../lib/adminService';
 import { getAllCloneRequests, type CloneRequest } from '../lib/cloneService';
 import { getAllDemoRequests, type DemoRequest } from '../lib/demoRequestService';
+import { getPortalSettings, type PortalContent } from '../lib/portalSettingsService';
+import { usePortalSettings } from '../context/PortalSettingsContext';
+import { FamilyIcon } from '../components/families/FamilyIcon';
 
 function NeuralCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -249,14 +252,6 @@ const ACTION_LABELS: Record<string, string> = {
   catalog_asset_archived:'archived a catalog asset',
 };
 
-const FAMILY_ICONS: Record<string, React.ReactNode> = {
-  atlas:    <Database className="h-5 w-5" />,
-  forge:    <Wand2 className="h-5 w-5" />,
-  sentinel: <ShieldAlert className="h-5 w-5" />,
-  relay:    <GitMerge className="h-5 w-5" />,
-  nexus:    <Server className="h-5 w-5" />,
-};
-
 const MATURITY_COLOR: Record<string, string> = {
   Production: '#10B981', production: '#10B981', validated: '#10B981',
   'Battle-Tested': '#0EA5E9', Beta: '#0EA5E9', beta: '#0EA5E9', 'battle-tested': '#0EA5E9',
@@ -299,6 +294,7 @@ function SectionHeader({ icon, title, subtitle, action, onAction }: {
 }
 
 export function Home() {
+  const { banners } = usePortalSettings();
   const navigate = useNavigate();
   const { user, isLoading: authLoading } = useAuth();
   const { families, loading: familiesLoading } = useFamilies();
@@ -314,11 +310,20 @@ export function Home() {
   const [activityLoading, setActivityLoading] = useState(true);
   const [cloneLoading, setCloneLoading]       = useState(true);
   const [demoLoading, setDemoLoading]         = useState(true);
+  // Alternate banner implementations are retained below but intentionally disabled.
+  const [bannerVariant] = useState<'current' | 'lifecycle' | 'process'>('current');
+  const [portalContent, setPortalContent] = useState<Pick<PortalContent, 'aiv_portal_name' | 'aiv_portal_description' | 'aiv_portal_url'>>({
+    aiv_portal_name: 'AIV Intelligence Portal',
+    aiv_portal_description: "Access InfoVision's AI intelligence hub for insights, tools, and resources",
+    aiv_portal_url: 'https://aivportal.infovision.ai/',
+  });
 
   const isAdmin  = user?.role === 'Aimplify.Admin' || user?.role === 'Aimplify.Owner';
   const firstName = user?.display_name?.split(' ')[0] ?? user?.email?.split('@')[0] ?? '';
   const hour     = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+  useEffect(() => { void getPortalSettings().then(setPortalContent).catch(() => undefined); }, []);
 
   useEffect(() => {
     if (authLoading) return;
@@ -396,6 +401,7 @@ export function Home() {
     <div className="min-h-screen bg-gray-50 animate-in fade-in duration-300 pb-16">
 
       {/* ── Hero Banner ─────────────────────────────────────────────────── */}
+      {bannerVariant === 'current' ? (
       <div className="relative overflow-hidden" style={{ background: 'linear-gradient(120deg, #1a237e 0%, #3949ab 30%, #6a1b9a 65%, #c2185b 100%)', minHeight: 200 }}>
 
 
@@ -420,13 +426,13 @@ export function Home() {
               {/* Headline */}
               <motion.h1 initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.15 }}
                 className="mb-3 text-3xl font-bold text-white md:text-4xl leading-tight">
-                <span className="font-extrabold">AI</span>mplify <span className="font-extrabold">Outcome.</span>
+                <span className="font-extrabold">{banners.home.title}</span>
               </motion.h1>
 
               {/* Subtitle */}
               <motion.p initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.3 }}
                 className="mb-5 text-sm text-white/70 md:text-[15px] leading-relaxed">
-                One platform for discovering, reusing, and deploying proven AI accelerators.
+                {banners.home.subtitle}
               </motion.p>
 
               {/* Pill badge */}
@@ -474,10 +480,38 @@ export function Home() {
           </div>
         </div>
       </div>
+      ) : (
+        <section className="relative min-h-[247px] overflow-hidden text-white" style={{ background: 'linear-gradient(120deg, #1a237e 0%, #3949ab 30%, #6a1b9a 65%, #c2185b 100%)' }}>
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at 18% 70%, rgba(255,255,255,.09), transparent 48%), radial-gradient(ellipse at 76% 40%, rgba(56,189,248,.22), transparent 34%), radial-gradient(ellipse at 88% 75%, rgba(244,114,182,.18), transparent 38%)' }} />
+          <NeuralCanvas />
+          <div className="relative mx-auto grid max-w-7xl gap-5 px-6 py-6 md:px-10 lg:grid-cols-[.82fr_1.18fr] lg:items-center">
+            <motion.div initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: .65, ease: 'easeOut' }}>
+              <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .12, duration: .5 }} className="text-4xl font-extrabold tracking-[.08em] md:text-5xl">{banners.home.title}</motion.h1>
+              {bannerVariant === 'process'
+                ? <p className="mt-3 text-lg font-medium leading-relaxed md:text-xl"><span className="text-cyan-400">AI</span> Management for <span className="text-sky-400">P</span>rocess Lifecycle,<br /><span className="text-sky-400">I</span>ntelligence, <span className="text-cyan-400">F</span>low &amp; <span className="text-sky-400">Y</span>ield</p>
+                : <p className="mt-3 text-lg font-medium leading-relaxed md:text-xl">Amplify <span className="text-cyan-400">Intelligence.</span> <span className="text-sky-400">Automate</span> Work.<br /><span className="text-violet-400">Transform</span> Business.</p>}
+              <motion.div initial={{ width: 0 }} animate={{ width: 128 }} transition={{ delay: .3, duration: .7 }} className="my-4 h-0.5 bg-gradient-to-r from-cyan-300 to-pink-300" />
+              {bannerVariant === 'lifecycle' && <><h2 className="text-sm font-semibold text-cyan-400">The Enterprise AI Platform for the Full Lifecycle</h2><p className="mt-1.5 max-w-lg text-xs leading-5 text-slate-300">A unified platform to build, power, secure and execute AI across your enterprise—from foundation to business outcomes.</p></>}
+              <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
+                {(bannerVariant === 'process' ? [['Amplify', 'Intelligence'], ['Automate', 'Work'], ['Drive', 'Outcomes'], ['Deliver', 'Impact']] : [['Accelerate', 'AI Innovation'], ['Maximize', 'Productivity'], ['Reduce Risk', '& Ensure Trust'], ['Drive Impact', 'Business Outcomes']]).map(([title, detail], index) => <motion.div key={title} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .35 + index * .08 }} className="border-l border-white/30 pl-3"><div className={['text-cyan-200','text-sky-200','text-violet-200','text-amber-200'][index]}>{title}</div><div className="mt-1 text-white/70">{detail}</div></motion.div>)}
+              </div>
+            </motion.div>
+            <motion.div initial={{ opacity: 0, x: 28, scale: .97 }} animate={{ opacity: 1, x: 0, scale: 1 }} transition={{ duration: .7, delay: .12, ease: 'easeOut' }} className="relative">
+              <motion.div animate={{ scale: [1, 1.045, 1], opacity: [.55, .85, .55] }} transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }} className="absolute left-1/2 top-1/2 h-24 w-60 -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-[8px] border-cyan-200/55 shadow-[0_0_34px_rgba(125,211,252,.8)] md:w-[22rem]" />
+              <div className="relative grid grid-cols-2 overflow-hidden rounded-[2rem] border border-white/25 bg-white/10 shadow-2xl backdrop-blur-md">
+                {[['Forge','Build AI.','AI Engineering & Development'],['Atlas','Enable AI.','AI Foundation, Data & Platform'],['Sentinel','Secure AI.','AI Security, Risk & Governance'],['Titan','Execute AI.','Agentic, Automation & Functional AI']].map(([name, action, detail], index) => <motion.button initial={{ opacity: 0, scale: .88 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: .28 + index * .1, duration: .4 }} whileHover={{ y: -3, backgroundColor: 'rgba(255,255,255,.15)' }} key={name} onClick={() => navigate(`/family/${name}`)} className="group flex min-h-28 flex-col items-center justify-center border border-white/10 p-3 text-center"><motion.div whileHover={{ rotate: [0, -6, 6, 0], scale: 1.12 }} transition={{ duration: .45 }}><FamilyIcon family={name} color={families[name]?.color} className="mb-1 h-10 w-10" /></motion.div><div className="text-sm font-extrabold uppercase" style={{ color: families[name]?.color }}>{name}</div><div className="text-xs font-bold">{action}</div><div className="mt-0.5 max-w-40 text-[9px] leading-3 text-white/70">{detail}</div></motion.button>)}
+              </div>
+            </motion.div>
+          </div>
+          {bannerVariant === 'lifecycle' && <div className="relative mx-auto mb-3 grid max-w-7xl grid-cols-2 gap-px overflow-hidden rounded-xl border border-blue-400/25 bg-blue-400/20 text-[10px] sm:grid-cols-5">
+            {['End-to-End AI Lifecycle','Unified & Scalable Platform','Built for Trust, Security & Compliance','Human + AI Collaboration','Outcomes That Matter'].map((item, index) => <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .5 + index * .07 }} key={item} className="bg-white/10 px-3 py-2.5 text-center font-semibold text-white/85 backdrop-blur-md">{item}</motion.div>)}
+          </div>}
+        </section>
+      )}
 
-      {/* ── IVAI Intelligence Portal banner ─────────────────────────────── */}
+      {/* ── AIV Intelligence Portal banner ──────────────────────────────── */}
       <a
-        href="https://aivportal.infovision.ai/"
+        href={portalContent.aiv_portal_url}
         target="_blank"
         rel="noopener noreferrer"
         className="group flex items-center justify-between gap-4 border-b border-sky-100 bg-gradient-to-r from-sky-50 via-white to-sky-50 px-6 py-3 transition-colors hover:bg-sky-50 md:px-10"
@@ -487,9 +521,9 @@ export function Home() {
             <ExternalLink className="h-3.5 w-3.5" />
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <span className="font-semibold text-sky-700">IVAI Intelligence Portal</span>
+            <span className="font-semibold text-sky-700">{portalContent.aiv_portal_name}</span>
             <span className="hidden text-gray-400 sm:inline">—</span>
-            <span className="hidden text-gray-500 sm:inline">Access InfoVision's AI intelligence hub for insights, tools, and resources</span>
+            <span className="hidden text-gray-500 sm:inline">{portalContent.aiv_portal_description}</span>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-sky-600 group-hover:text-sky-700">
@@ -501,7 +535,7 @@ export function Home() {
       <div className="mx-auto max-w-7xl px-6 pt-8 md:px-10">
 
         {/* KPI stats */}
-        <div className="mb-8">
+        <div className="mb-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-7">
           <div className="mb-5 flex items-start justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-50 text-sky-500">
@@ -518,7 +552,8 @@ export function Home() {
               <motion.div key={i}
                 initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
                 onClick={() => navigate(stat.path)}
-                className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl bg-white transition-all hover:shadow-md hover:-translate-y-0.5">
+                className="group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+                style={{ borderColor: `${stat.accent}42` }}>
                 {/* Card body */}
                 <div className="flex flex-1 flex-col p-5">
                   <div className="mb-auto flex items-start justify-between">
@@ -545,47 +580,41 @@ export function Home() {
           <SectionHeader
             icon={<Layers className="h-4 w-4" />}
             title="Platform Families"
-            subtitle="Five practice-area domains of reusable AI accelerators"
+            subtitle="FAST — Forge, Atlas, Sentinel, and Titan reusable AI accelerators"
             action="Browse all"
             onAction={() => navigate('/catalog')}
           />
           {familiesLoading ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                  <Skeleton className="mb-3 h-5 w-20" /><Skeleton className="mb-1 h-3 w-full" /><Skeleton className="h-3 w-3/4" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="min-h-40 rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+                  <div className="mb-3 flex items-center gap-2.5"><Skeleton className="h-11 w-11 rounded-full" /><Skeleton className="h-5 w-20" /></div><Skeleton className="mb-2 h-6 w-full" /><Skeleton className="mb-3 h-7 w-4/5" /><Skeleton className="h-7 w-14" />
                 </div>
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {Object.entries(families).map(([k, f], i) => (
-                <motion.div key={k}
-                  initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.05 }}
+                <motion.button type="button" key={k}
+                  initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08, duration: .45 }}
+                  whileHover={{ y: -3, boxShadow: `0 12px 26px ${f.color}18` }}
                   onClick={() => navigate(`/family/${k}`)}
-                  className="group relative flex h-36 cursor-pointer flex-col overflow-hidden rounded-xl border p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5"
-                  style={{ backgroundColor: `${f.color}12`, borderColor: '#e5e7eb' }}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-lg" style={{ backgroundColor: `${f.color}25`, color: f.color }}>
-                        {FAMILY_ICONS[k.toLowerCase()] ?? <Layers className="h-5 w-5" />}
-                      </div>
-                      <span className="text-sm font-bold leading-tight" style={{ color: f.color }}>{f.name}</span>
-                    </div>
+                  className="group relative flex min-h-[170px] cursor-pointer flex-col overflow-hidden rounded-xl border text-left transition-colors"
+                  style={{ background: `linear-gradient(145deg, ${f.color}0D 0%, ${f.color}05 72%, #ffffff 100%)`, borderColor: `${f.color}25` }}>
+                  <div className="flex items-center gap-2.5 px-3.5 py-3">
+                      <motion.div whileHover={{ rotate: [0, -5, 5, 0], scale: 1.06 }} transition={{ duration: .45 }} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border" style={{ backgroundColor: `${f.color}0D`, borderColor: `${f.color}22`, boxShadow: `inset 0 0 0 4px ${f.color}07` }}>
+                        <FamilyIcon family={k} color={f.color} className="h-7 w-7" />
+                      </motion.div>
+                      <div><span className="block text-base font-extrabold uppercase tracking-tight" style={{ color: f.color }}>{f.name}</span><span className="mt-1 block h-0.5 w-7 rounded-full transition-all duration-300 group-hover:w-10" style={{ backgroundColor: f.color }} /></div>
                   </div>
-                  <p className="mb-3 text-[11px] leading-relaxed text-gray-400 group-hover:text-gray-600 transition-colors">
-                    {(f as any).tagline}
-                  </p>
-                  <div className="mt-auto flex items-end justify-between">
-                    <span className="text-4xl font-extrabold tabular-nums leading-none" style={{ color: f.color }}>
-                      {(f as any).asset_count ?? 0}
-                    </span>
-                    <div className="flex items-center gap-1 text-[11px] font-semibold opacity-0 transition-opacity group-hover:opacity-100"
-                      style={{ color: f.color }}>
-                      Explore <ChevronRight className="h-3 w-3" />
-                    </div>
+                  <div className="border-y px-3.5 py-2" style={{ borderColor: `${f.color}18` }}><div className="flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: f.color }} /><span className="text-sm font-extrabold text-slate-900">{familyAction(k)}</span></div></div>
+                  <div className="flex min-h-0 flex-1 items-center justify-between gap-3 px-3.5 py-2.5">
+                    <p className="line-clamp-2 text-[11px] font-medium leading-4 text-slate-500">{f.tagline}</p>
+                    <div className="relative z-10 shrink-0 text-right"><span className="block text-2xl font-extrabold tabular-nums leading-none" style={{ color: f.color }}>{f.asset_count ?? 0}</span><span className="mt-1 block text-[9px] font-semibold text-slate-500">AI Accelerators</span></div>
+                    <div className="pointer-events-none absolute -bottom-16 -right-10 h-24 w-32 rotate-[-18deg] rounded-[50%] opacity-45 transition-transform duration-500 group-hover:scale-110" style={{ backgroundImage: `radial-gradient(${f.color} 1px, transparent 1px)`, backgroundSize: '7px 7px', maskImage: 'linear-gradient(135deg, transparent 5%, black 70%)' }} />
+                    <div className="absolute right-3 top-3 z-10 flex items-center gap-0.5 text-[10px] font-bold opacity-0 transition-opacity group-hover:opacity-100" style={{ color: f.color }}>Explore <ChevronRight className="h-3 w-3" /></div>
                   </div>
-                </motion.div>
+                </motion.button>
               ))}
             </div>
           )}

@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { defaultFamilyBadge, useFamilies } from '../../context/FamiliesContext';
+import { defaultFamilyBadge, familyAction, useFamilies } from '../../context/FamiliesContext';
 import { CC, CL, MC, ML } from '../../data/uiConstants';
 import { CheckCircle2, Heart } from 'lucide-react';
 import type { CatalogAsset } from '../../lib/catalogService';
@@ -43,7 +43,7 @@ export function AssetCard({ asset, index }: AssetCardProps) {
             {asset.catalog_code}
           </span>
           <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: fm.color }}>
-            {fm.name}
+            {fm.name} — {familyAction(asset.family)}
           </span>
         </div>
         <div className="flex gap-1.5">

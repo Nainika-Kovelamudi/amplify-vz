@@ -12,7 +12,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
-from app.db.models import ActivityLog, AssetStatus, CatalogAsset, CloneRequest, CloneStatus, DemoRequest, Submission, SubmissionStatus, UserProfile, UserRole
+from app.db.models import ActivityLog, AssetStatus, CatalogAsset, CloneRequest, CloneStatus, DemoRequest, PortalSetting, Submission, SubmissionStatus, UserProfile, UserRole
 from app.deps.rbac import get_current_user, require_role
 from app.schemas.admin import (
     AdminStatsResponse,
@@ -33,6 +33,7 @@ from app.services.notification_service import push_notification, push_notificati
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["Admin"])
+DEFAULT_FAMILY_ORDER = ["Atlas", "Forge", "Titan", "Sentinel"]
 
 
 def _sub_to_response(s: Submission) -> SubmissionResponse:
@@ -380,6 +381,12 @@ async def get_executive_report(
     """Owner-only executive view of submission, approval, publishing, and adoption KPIs."""
     now = datetime.now(tz=timezone.utc)
     period_start = now - timedelta(days=days)
+    portal_setting = (await db.execute(
+        select(PortalSetting).where(PortalSetting.key == "portal_content")
+    )).scalar_one_or_none()
+    configured_order = (portal_setting.value or {}).get("family_order", DEFAULT_FAMILY_ORDER) if portal_setting else DEFAULT_FAMILY_ORDER
+    family_order = [name for name in configured_order if name in DEFAULT_FAMILY_ORDER]
+    family_order.extend(name for name in DEFAULT_FAMILY_ORDER if name not in family_order)
 
     period_submissions = list((await db.execute(
         select(Submission).where(Submission.created_at >= period_start)
@@ -455,6 +462,14 @@ async def get_executive_report(
                 published=sum(1 for s in submissions if s.status == SubmissionStatus.Published),
                 average_ai_score=round(sum(scores) / len(scores), 1) if scores else 0.0,
             ))
+        if field == "family":
+            # Keep executive reporting aligned with the FAST taxonomy. Legacy
+            # records are intentionally omitted until the data owners realign them.
+            by_name = {row.name: row for row in rows}
+            return [
+                by_name.get(name, ReportBreakdown(name=name, submitted=0, approved=0, published=0, average_ai_score=0.0))
+                for name in family_order
+            ]
         return sorted(rows, key=lambda row: row.submitted, reverse=True)
 
     clone_requests = (await db.execute(
@@ -475,10 +490,10 @@ async def get_executive_report(
     family_assets = [
         ExecutiveFamilyMetric(
             name=name,
-            asset_count=count,
-            percentage=round(count * 100 / published_assets, 1) if published_assets else 0.0,
+            asset_count=family_counts.get(name, 0),
+            percentage=round(family_counts.get(name, 0) * 100 / published_assets, 1) if published_assets else 0.0,
         )
-        for name, count in family_counts.most_common()
+        for name in family_order
     ]
 
     event_definitions = [

@@ -121,7 +121,9 @@ class PlatformFamilyResponse(BaseModel):
     tagline: Optional[str] = None
     department: Optional[str] = None
     description: Optional[str] = None
+    summary: Optional[str] = None
     long_description: Optional[str] = None
+    key_assets: List[str] = []
     use_cases: List[str] = []
     depends_on: List[str] = []
     enables: List[str] = []

@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { FamiliesProvider } from './context/FamiliesContext';
+import { PortalSettingsProvider } from './context/PortalSettingsContext';
 import { MainLayout } from './components/layout/MainLayout';
 import { Home } from './pages/Home';
 import { Catalog } from './pages/Catalog';
@@ -17,6 +18,7 @@ import { Observability } from './pages/Observability';
 import { ExecutiveReports } from './pages/ExecutiveReports';
 import { WhyAimplify } from './pages/WhyAimplify';
 import { RoleManager } from './pages/RoleManager';
+import { PortalSettings } from './pages/PortalSettings';
 import { CloneRedeem } from './pages/CloneRedeem';
 import { Login } from './pages/Login';
 import { AuthCallback } from './pages/AuthCallback';
@@ -37,7 +39,7 @@ function App() {
     <BrowserRouter>
       <OAuthRedirectHandler />
       <AuthProvider>
-        <FamiliesProvider>
+        <PortalSettingsProvider><FamiliesProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
@@ -59,10 +61,11 @@ function App() {
               <Route path="admin/observability" element={<AdminGuard superAdminOnly><Observability /></AdminGuard>} />
               <Route path="admin/reports" element={<AdminGuard superAdminOnly><ExecutiveReports /></AdminGuard>} />
               <Route path="admin/roles" element={<AdminGuard superAdminOnly><RoleManager /></AdminGuard>} />
+              <Route path="admin/settings" element={<AdminGuard superAdminOnly><PortalSettings /></AdminGuard>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
-        </FamiliesProvider>
+        </FamiliesProvider></PortalSettingsProvider>
       </AuthProvider>
     </BrowserRouter>
   );

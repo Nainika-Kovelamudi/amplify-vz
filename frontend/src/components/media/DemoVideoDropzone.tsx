@@ -94,8 +94,8 @@ export function DemoVideoDropzone({ videoUrl, onVideoUrlChange, disabled, entity
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-gray-200">
                 <Upload className="h-6 w-6 text-sky-500" />
               </div>
-              <div className="text-sm font-bold text-gray-900">Upload demo video</div>
-              <div className="max-w-md text-xs leading-relaxed text-gray-500">Video up to 800 MB · drag & drop or browse</div>
+              <div className="text-sm font-bold text-gray-900">Upload video</div>
+              <div className="max-w-md text-xs leading-relaxed text-gray-500">Upload one or more videos · up to 800 MB each · drag & drop or browse</div>
               <button type="button" disabled={disabled || uploading} onClick={() => inputRef.current?.click()}
                 className="mt-1 shrink-0 rounded-lg border border-sky-200 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wide text-sky-700 shadow-sm transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50">
                 Browse files

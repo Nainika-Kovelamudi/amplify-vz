@@ -1,7 +1,41 @@
 from datetime import datetime
 from typing import Optional, List, Any
+from urllib.parse import urlparse
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+def _validate_corporate_repo(value: Optional[str]) -> Optional[str]:
+    if value is None or not value.strip():
+        return value
+    normalized = value.strip().lower().rstrip("/")
+    parsed = urlparse(normalized)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    is_corporate_github = (
+        parsed.scheme == "https"
+        and parsed.hostname in {"github.com", "www.github.com"}
+        and len(path_parts) >= 2
+        and (
+            path_parts[0] == "infovision"
+            or path_parts[0].startswith("infovision-")
+            or path_parts[0] == "ivl"
+            or path_parts[0].startswith("ivl-")
+        )
+    )
+    allowed_prefixes = (
+        "https://dev.azure.com/infovision/",
+        "https://infovision.visualstudio.com/",
+        "https://gitlab.infovision.com/",
+    )
+    is_other_corporate_repo = any(
+        normalized.startswith(prefix) and len(normalized) > len(prefix)
+        for prefix in allowed_prefixes
+    )
+    if not (is_corporate_github or is_other_corporate_repo):
+        raise ValueError(
+            "An InfoVision corporate repository URL is required. GitHub organizations may be infovision, infovision-<label>, ivl, or ivl-<label>."
+        )
+    return value.strip()
 
 
 class SubmissionCreate(BaseModel):
@@ -34,6 +68,8 @@ class SubmissionCreate(BaseModel):
     # Re-submission of an existing published asset
     catalog_asset_id: Optional[str] = None
 
+    _repo_must_be_corporate = field_validator("repo_url")(_validate_corporate_repo)
+
 
 class SubmissionUpdate(BaseModel):
     aiv_ideation_id: Optional[str] = None
@@ -59,6 +95,8 @@ class SubmissionUpdate(BaseModel):
     designation: Optional[str] = None
     category: Optional[str] = None
     architecture_file_url: Optional[str] = None
+
+    _repo_must_be_corporate = field_validator("repo_url")(_validate_corporate_repo)
 
 
 class SubmissionResponse(BaseModel):

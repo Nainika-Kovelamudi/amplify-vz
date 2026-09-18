@@ -8,7 +8,7 @@ import {
   Terminal, Package, Users, Copy, Check, ChevronRight, Star,
   GitMerge, Download, Rocket, MonitorPlay, XCircle, Mail, MessageSquare, Send, Trash2, AlertTriangle,
 } from 'lucide-react';
-import { defaultFamilyBadge, useFamilies } from '../context/FamiliesContext';
+import { defaultFamilyBadge, familyAction, useFamilies } from '../context/FamiliesContext';
 import { Button } from '../components/ui/Button';
 import { getCatalogAsset, getCatalog, toggleAssetLike, trackArtifactDownload, trackDemoView, trackAssetView, getAssetFeedback, submitAssetFeedback, deleteCatalogAsset, type CatalogAsset, type AssetFeedback } from '../lib/catalogService';
 import { useAuth } from '../context/AuthContext';
@@ -624,7 +624,7 @@ export function AssetDetail() {
                 {/* Family card */}
                 <div className="rounded-xl border p-5 shadow-sm"
                   style={{ borderColor: `${fm.color}30`, backgroundColor: `${fm.color}08` }}>
-                  <p className="mb-1 text-xs font-bold uppercase tracking-wider" style={{ color: fm.color }}>{fm.name} Family</p>
+                  <p className="mb-1 text-xs font-bold uppercase tracking-wider" style={{ color: fm.color }}>{fm.name} — {familyAction(asset.family)}</p>
                   <p className="mb-3 text-sm font-semibold text-gray-800">{fm.tagline}</p>
                   <button onClick={() => navigate(`/family/${asset.family}`)}
                     className="flex items-center gap-1.5 text-xs font-medium hover:underline" style={{ color: fm.color }}>

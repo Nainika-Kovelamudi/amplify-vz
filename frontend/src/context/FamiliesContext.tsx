@@ -8,6 +8,8 @@ export interface FamilyUi {
   color: string;
   bg: string;
   longDesc: string;
+  summary: string;
+  keyAssets: string[];
   useCases: string[];
   dependsOn: string[];
   enables: string[];
@@ -22,6 +24,10 @@ type FamiliesContextValue = {
 
 const FamiliesContext = createContext<FamiliesContextValue>({ families: {}, loading: true });
 
+export function familyAction(family: string): string {
+  return ({ forge: 'Build AI.', atlas: 'Enable AI.', sentinel: 'Secure AI.', titan: 'Execute AI.' } as Record<string, string>)[family.toLowerCase()] ?? '';
+}
+
 function toFamilyUi(f: PlatformFamily): FamilyUi {
   return {
     name: f.name,
@@ -29,6 +35,8 @@ function toFamilyUi(f: PlatformFamily): FamilyUi {
     color: f.color,
     bg: `${f.color}14`,
     longDesc: f.long_description ?? f.description ?? '',
+    summary: f.summary ?? '',
+    keyAssets: f.key_assets ?? [],
     useCases: f.use_cases ?? [],
     dependsOn: f.depends_on ?? [],
     enables: f.enables ?? [],
@@ -39,11 +47,10 @@ function toFamilyUi(f: PlatformFamily): FamilyUi {
 
 // Hardcoded fallback so the dropdown always works even when the API is unreachable
 const FALLBACK_FAMILIES: Record<string, FamilyUi> = {
-  Atlas:    { name: 'Atlas',    tagline: 'DataOps & Master Data',           color: '#3B82F6', bg: '#3B82F614', longDesc: '', useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
-  Forge:    { name: 'Forge',    tagline: 'AI SDLC & Prompt Engineering',    color: '#8B5CF6', bg: '#8B5CF614', longDesc: '', useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
-  Sentinel: { name: 'Sentinel', tagline: 'Security & Compliance',           color: '#EF4444', bg: '#EF444414', longDesc: '', useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
-  Relay:    { name: 'Relay',    tagline: 'Process Automation & QE',         color: '#F59E0B', bg: '#F59E0B14', longDesc: '', useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
-  Nexus:    { name: 'Nexus',    tagline: 'Infrastructure & Managed AI Ops', color: '#10B981', bg: '#10B98114', longDesc: '', useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
+  Forge:    { name: 'Forge', tagline: 'AI Engineering & Development', color: '#F05A0A', bg: '#F05A0A14', summary: 'Forge builds, engineers and operationalizes AI solutions from idea to production.', longDesc: 'FORGE is the AI engineering and development family within AIMPLIFY, enabling organizations to design, build, test, deploy and continuously improve AI-powered solutions. It provides the engineering capabilities required across the AI Software Development Lifecycle, from experimentation and prototyping through production deployment and evolution.', keyAssets: ['AI Engineering', 'AI Development', 'AI SDLC', 'GenAI', 'Agentic AI', 'AI Applications'], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
+  Atlas:    { name: 'Atlas', tagline: 'AI Foundation & Platform', color: '#147FE6', bg: '#147FE614', summary: 'ATLAS provides the data, models, knowledge, platform and infrastructure that power enterprise AI.', longDesc: 'ATLAS is the foundational layer of AIMPLIFY, providing the technology ecosystem required to build and operate enterprise AI at scale. It brings together AI infrastructure, data, models, knowledge, compute, platforms and reusable services into a scalable and composable AI foundation.', keyAssets: ['AI Foundation', 'Data', 'Models', 'Knowledge', 'Platform', 'Infrastructure'], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
+  Sentinel: { name: 'Sentinel', tagline: 'AI Security, Risk & Governance', color: '#07885C', bg: '#07885C14', summary: 'SENTINEL secures, governs, monitors and assures AI across its entire lifecycle.', longDesc: "SENTINEL is AIMPLIFY's AI Trust, Security and Governance family, designed to protect AI systems from emerging threats while ensuring responsible, compliant and controlled AI adoption. It provides continuous security, risk management, governance, guardrails and observability across models, agents, applications and AI workflows.", keyAssets: ['AI Security', 'Red Team', 'Guardrails', 'Observability', 'Risk', 'Compliance', 'Governance'], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
+  Titan:    { name: 'Titan', tagline: 'Agentic Automation & Functional AI', color: '#5B35CC', bg: '#5B35CC14', summary: 'TITAN puts AI to work through intelligent agents, automated workflows and AI-powered business operations.', longDesc: 'TITAN is the execution and business-value layer of AIMPLIFY. It transforms AI capabilities into autonomous and semi-autonomous digital workers that can reason, make decisions, orchestrate workflows and execute business processes across enterprise systems.', keyAssets: ['Agents', 'Workflows', 'Process Automation', 'Functional AI', 'Digital Workers', 'Business Operations'], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
 };
 
 export function FamiliesProvider({ children }: { children: ReactNode }) {
@@ -54,8 +61,9 @@ export function FamiliesProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    getPlatformFamilies()
-      .then((list) => {
+    const loadFamilies = () => {
+      setLoading(true);
+      void getPlatformFamilies().then((list) => {
         if (cancelled) return;
         if (list.length > 0) {
           const record: Record<string, FamilyUi> = {};
@@ -69,7 +77,13 @@ export function FamiliesProvider({ children }: { children: ReactNode }) {
         // keep FALLBACK_FAMILIES — dropdown still works offline
       })
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    };
+    loadFamilies();
+    window.addEventListener('portal-settings-updated', loadFamilies);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('portal-settings-updated', loadFamilies);
+    };
   }, [isAuthenticated]);
 
   const value = useMemo(() => ({ families, loading }), [families, loading]);
@@ -81,5 +95,5 @@ export function useFamilies(): FamiliesContextValue {
 }
 
 export function defaultFamilyBadge(): FamilyUi {
-  return { name: 'Platform', tagline: '', color: '#64748B', bg: '#64748B14', longDesc: '', useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 };
+  return { name: 'Platform', tagline: '', color: '#64748B', bg: '#64748B14', summary: '', longDesc: '', keyAssets: [], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 };
 }

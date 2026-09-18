@@ -462,6 +462,13 @@ export function MainLayout() {
                       <>
                         <button
                           className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                          onClick={() => { setIsProfileOpen(false); navigate('/admin/reports'); }}
+                        >
+                          <BarChart3 className="h-4 w-4" />
+                          Executive Reports
+                        </button>
+                        <button
+                          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
                           onClick={() => { setIsProfileOpen(false); navigate('/admin/users'); }}
                         >
                           <Settings className="h-4 w-4" />
@@ -476,10 +483,10 @@ export function MainLayout() {
                         </button>
                         <button
                           className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                          onClick={() => { setIsProfileOpen(false); navigate('/admin/reports'); }}
+                          onClick={() => { setIsProfileOpen(false); navigate('/admin/settings'); }}
                         >
-                          <BarChart3 className="h-4 w-4" />
-                          Executive Reports
+                          <Settings className="h-4 w-4" />
+                          Platform Settings
                         </button>
                       </>
                     )}

@@ -43,20 +43,32 @@ async def list_approved_ideations() -> list[dict[str, Any]]:
         collection = _mongo_client(uri)[db_name][collection_name]
         rows = await collection.find(
             {"current_stage": "l3_approved"},
-            {"_id": 0, "idea_reference_no": 1, "idea_title": 1, "updated_at": 1},
+            {
+                "_id": 0, "idea_reference_no": 1, "idea_title": 1, "updated_at": 1,
+                "family": 1, "platform_family": 1, "asset_family": 1,
+                "solution_family": 1, "ai_family": 1,
+            },
         ).sort("updated_at", -1).to_list(length=1000)
     except PyMongoError as exc:
         logger.exception("Failed to query approved AIV ideations from MongoDB")
         raise HTTPException(status_code=503, detail="Could not load approved ideations from the AI Intelligence Portal database.") from exc
 
-    return [
-        {
+    results = []
+    for row in rows:
+        if not row.get("idea_reference_no"):
+            continue
+        raw_family = next((row.get(key) for key in (
+            "platform_family", "asset_family", "family", "solution_family", "ai_family"
+        ) if row.get(key)), "")
+        family_text = str(raw_family).strip()
+        canonical_family = next((name for name in ("Forge", "Atlas", "Sentinel", "Titan")
+                                 if name.lower() in family_text.lower()), "")
+        results.append({
             "id": str(row.get("idea_reference_no") or "").strip(),
             "title": str(row.get("idea_title") or row.get("idea_reference_no") or "").strip(),
-        }
-        for row in rows
-        if row.get("idea_reference_no")
-    ]
+            "family": canonical_family,
+        })
+    return results
 
 
 async def require_approved_ideation(idea_id: str) -> dict[str, str]:

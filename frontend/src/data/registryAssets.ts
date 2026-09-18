@@ -254,9 +254,9 @@ export const REGISTRY_ASSETS = [
     tags: tags("Autonomous SDLC, AI SDLC, AI enabled development, AI framework for SDLC"),
   },
   {
-    id: "RLY-001",
+    id: "TIT-001",
     name: "Multiagent Call Center Automation",
-    family: "relay" as const,
+    family: "titan" as const,
     category: "Multi-Agent Orchestration, Call Center Automation",
     clouds: ["gcp"] as ("aws" | "gcp" | "azure")[],
     maturity: "Production" as const,
@@ -281,9 +281,9 @@ export const REGISTRY_ASSETS = [
     repoUrl: "https://github.com/by-Gokulram/multiagent_callcenter_automation.git",
   },
   {
-    id: "RLY-002",
+    id: "TIT-002",
     name: "Healthcare Bot",
-    family: "relay" as const,
+    family: "titan" as const,
     category: "Domain Agent, Knowledge Retrieval",
     clouds: ["azure", "gcp"] as ("aws" | "gcp" | "azure")[],
     maturity: "Production" as const,
@@ -307,9 +307,9 @@ export const REGISTRY_ASSETS = [
     tags: tags("RAG, Healthcare, Dual Persona, Chroma, Redis, Embeddings, Knowledge Retrieval, Gemini, FastAPI"),
   },
   {
-    id: "RLY-003",
+    id: "TIT-003",
     name: "Contextual Intelligence — Speech Diarization",
-    family: "relay" as const,
+    family: "titan" as const,
     category: "Conversational AI, Real-Time Intelligence",
     clouds: ["gcp", "azure"] as ("aws" | "gcp" | "azure")[],
     maturity: "Battle-Tested" as const,
@@ -335,9 +335,9 @@ export const REGISTRY_ASSETS = [
     ),
   },
   {
-    id: "RLY-004",
+    id: "TIT-004",
     name: "AIOps",
-    family: "relay" as const,
+    family: "titan" as const,
     category: "Automated Support, SRE",
     clouds: ["azure"] as ("aws" | "gcp" | "azure")[],
     maturity: "Experimental" as const,
@@ -361,7 +361,7 @@ export const REGISTRY_ASSETS = [
   {
     id: "SNT-001",
     name: "Sentiment Analysis on Call Recordings",
-    family: "relay" as const,
+    family: "titan" as const,
     category: "Call Quality Monitoring, Compliance Analytics",
     clouds: ["gcp"] as ("aws" | "gcp" | "azure")[],
     maturity: "Production" as const,
@@ -423,7 +423,7 @@ export const REGISTRY_ASSETS = [
     tags: tags("AI Governance, Responsible AI, Enterprise Compliance, Risk Management, Regulatory Compliance"),
   },
   {
-    id: "NXS-001",
+    id: "TIT-005",
     name: "SLM vs LLM Decision Playbook",
     family: "sentinel" as const,
     category: "Model Selection, Cost Benchmarking",
@@ -452,9 +452,9 @@ export const REGISTRY_ASSETS = [
     demoUrl: "https://arch-eval-wx7y.vercel.app/",
   },
   {
-    id: "NXS-002",
+    id: "TIT-006",
     name: "PromptEval",
-    family: "nexus" as const,
+    family: "titan" as const,
     category: "Prompt Engineering, Quality Evaluation",
     clouds: ["azure", "gcp"] as ("aws" | "gcp" | "azure")[],
     maturity: "Experimental" as const,
@@ -465,7 +465,7 @@ export const REGISTRY_ASSETS = [
     ownerInit: "KB",
     desc: "Shared prompt evaluation framework for testing, scoring, and iterating on prompts across all platform families and LLM providers.",
     longDesc:
-      "PromptEval is a cross-platform prompt quality evaluation framework for testing, scoring, and iterating on prompts before production deployment. Derived from the LIE platform (LLM Insights Engine) prompt benchmarking capabilities and the broader Nexus prompt management pattern.",
+      "PromptEval is a cross-platform prompt quality evaluation framework for testing, scoring, and iterating on prompts before production deployment. Derived from the LIE platform (LLM Insights Engine) prompt benchmarking capabilities and the broader Titan prompt management pattern.",
     ...archFromFlow(
       "Prompt Variants Input --> Dataset Selection --> Multi-Model Execution --> Response Scoring (Accuracy / Relevance / Tone) --> Side-by-Side Comparison --> Regression Detection --> Evaluation Report Export",
       "Blue, Violet, Orange, Green and repeat",
@@ -478,7 +478,7 @@ export const REGISTRY_ASSETS = [
     tags: tags("Prompt Engineering, Evaluation, Benchmarking, Quality, LLM Testing, Regression, Prompt Management"),
   },
   {
-    id: "NXS-003",
+    id: "TIT-007",
     name: "LIE — LLM Insight Engine",
     family: "sentinel" as const,
     category: "Model Selection, Cost Benchmarking",
@@ -506,9 +506,9 @@ export const REGISTRY_ASSETS = [
     ),
   },
   {
-    id: "NXS-004",
+    id: "TIT-008",
     name: "Video Intelligence Platform (VIP)",
-    family: "nexus" as const,
+    family: "titan" as const,
     category: "Video processing using LLM and text annotation",
     clouds: ["aws", "gcp", "azure"] as ("aws" | "gcp" | "azure")[],
     maturity: "Experimental" as const,
