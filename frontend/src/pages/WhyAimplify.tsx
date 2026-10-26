@@ -1,100 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { BrainCircuit, Layers3, ShieldCheck, Target, TrendingUp, Users, Workflow } from 'lucide-react';
+import { BrainCircuit, Layers3, ShieldCheck, Target, TrendingUp, Users, Workflow, type LucideIcon } from 'lucide-react';
 import { familyAction, useFamilies } from '../context/FamiliesContext';
 import { FamilyIcon } from '../components/families/FamilyIcon';
 import { usePortalSettings } from '../context/PortalSettingsContext';
 
-const pillars = [
-  {
-    num: '1', icon: '🧭', color: '#00C6FF',
-    title: 'Driving an AI-First Culture',
-    body: "Becoming AI-First is a baseline imperative. Culture shifts don't happen on their own -they need a place to live. AImplify is that place. It provides a central, visible platform that accelerates mindset change, fuels ideation, and makes AI adoption tangible for every team, not just the tech leads.",
-  },
-  {
-    num: '2', icon: '🤝', color: '#7B4FFF',
-    title: 'Scaling Collective Innovation',
-    body: 'Our delivery teams are the eyes and ears of every customer engagement. AImplify gives them a voice beyond project delivery. It enables every InfoVisioner to contribute ideas, frameworks, and thought leadership that the entire organization can benefit from -through real use cases, not theoretical exercises.',
-  },
-  {
-    num: '3', icon: '🎯', color: '#FFB400',
-    title: 'Capturing Real Customer Problems',
-    body: 'The platform is built around actual customer problem statements, not hypothetical use cases. That focus is deliberate and powerful.',
-    bullets: [
-      'Learn what challenges clients face across engagements',
-      'Identify common patterns across customers and industries',
-      'Turn those patterns into reusable, scalable solutions',
-    ],
-  },
-  {
-    num: '4', icon: '💡', color: '#00B4A0',
-    title: 'Converting Ideas into Reusable IP',
-    body: 'An idea without a home is an idea lost. AImplify is the mechanism that turns insights, accelerators, and solutions into durable, reusable intellectual property. Every asset built lives on -available to delivery teams, sales teams, and future engagements. We compound value instead of starting over.',
-  },
-  {
-    num: '5', icon: '📦', color: '#1A3A6B',
-    title: 'Arming Sales With What We Actually Solve',
-    body: 'AImplify is not just an internal innovation platform. It directly equips customer-facing teams with real capability evidence.',
-    bullets: [
-      'Know which customer problems InfoVision can solve today',
-      'Access accelerators that already exist and can be demonstrated',
-      'Bring proven assets into proposals and customer conversations',
-    ],
-    footer: 'A catalog of proven capabilities beats a slide deck every time.',
-  },
-  {
-    num: '6', icon: '👁️', color: '#FF6B9D',
-    title: 'Changing Customer Perception',
-    body: 'In a competitive market, seeing is believing. A platform that demonstrates real, working AI capabilities shifts customer and prospect perception in ways that no presentation ever can. AImplify is a proof point -tangible, interactive, and differentiated. It shows the market that InfoVision builds, not just recommends.',
-  },
-  {
-    num: '7', icon: '⚡', color: '#00B4A0',
-    title: 'Transforming Delivery Teams to Move Faster',
-    body: 'Delivery teams should not start from zero on every engagement. AImplify puts proven assets directly in their hands -so they spend less time building foundations and more time solving the actual client problem.',
-    bullets: [
-      'Clone and deploy vetted accelerators in days, not months',
-      'Reduce ramp-up time on new engagements',
-      'Deliver with consistency, quality, and speed across every project',
-    ],
-    footer: 'Faster delivery is not just a competitive advantage. It is a margin advantage.',
-  },
-  {
-    num: '8', icon: '🧠', color: '#FF7A45',
-    title: 'Enabling Organizational Learning',
-    body: "Some of AImplify's most important outcomes are tacit. The platform becomes the place where InfoVisioners grow -not through mandatory training, but through real contribution and peer collaboration.",
-    bullets: [
-      'Cross-team collaboration on shared problems',
-      'Knowledge sharing from the front lines of delivery',
-      'Learning from real use cases and industry patterns',
-      "Understanding what's coming before it arrives",
-    ],
-  },
-  {
-    num: '9', icon: '📡', color: '#7B4FFF',
-    title: 'Investing in What Customers Are Actually Adopting',
-    body: 'Not all assets are equal. AImplify tracks which accelerators are actively being implemented by customers and gaining real traction -so we know where to double down.',
-    bullets: [
-      'Full traceability of asset adoption across customer engagements',
-      'Surface what is working in the market, in real time',
-      'Direct investment and improvement effort toward highest-impact assets',
-    ],
-    footer: 'We build what customers use. Traction guides every roadmap decision.',
-  },
-];
-
-const chips = [
-  '🚀 Faster Delivery', '🔁 Reusable IP', '💼 Stronger Sales', '📈 Better Margins',
-  '🤖 AI-Native Culture', '🌐 Smarter Teams', '🔍 Proven Capabilities',
-  '🎓 Continuous Learning', '⚡ Accelerated Delivery', '📡 Asset Traceability',
-];
-
-const benefits = [
-  { icon: Target, title: 'End-to-End AI Lifecycle', body: 'Manage the entire AI journey from ideation to impact.' },
-  { icon: Layers3, title: 'Unified & Integrated Platform', body: 'One platform. One experience. All your AI needs.' },
-  { icon: ShieldCheck, title: 'Built for Trust, Security & Compliance', body: 'Enterprise-grade security, governance and responsible AI by design.' },
-  { icon: Users, title: 'Human + AI Collaboration', body: 'Empower your teams with AI that augments human potential.' },
-  { icon: TrendingUp, title: 'Drive Measurable Outcomes', body: 'Optimize processes, accelerate flow and maximize yield.' },
-  { icon: BrainCircuit, title: 'Scalable. Flexible. Future-Ready.', body: "Built to scale with your business and adapt to what's next." },
-];
+const BENEFIT_ICONS: Record<string, LucideIcon> = {
+  Target, Layers3, ShieldCheck, Users, TrendingUp, BrainCircuit,
+};
 
 function PreviewTabs({ value, onChange }: { value: 'current' | 'infographic'; onChange: (value: 'current' | 'infographic') => void }) {
   return <div className="border-b border-slate-200 bg-white px-4 py-2">
@@ -105,7 +17,7 @@ function PreviewTabs({ value, onChange }: { value: 'current' | 'infographic'; on
   </div>;
 }
 
-function InfographicWhy({ families, title, subtitle }: { families: ReturnType<typeof useFamilies>['families']; title: string; subtitle: string }) {
+function InfographicWhy({ families, title, subtitle, why }: { families: ReturnType<typeof useFamilies>['families']; title: string; subtitle: string; why: ReturnType<typeof usePortalSettings>['why'] }) {
   const familyCopy: Record<string, string> = {
     Forge: 'Engineer, develop and customize AI solutions faster with best practices, tools and accelerators.',
     Atlas: 'Unify and prepare your data, modernize platforms and establish the foundation to scale AI with confidence.',
@@ -135,7 +47,7 @@ function InfographicWhy({ families, title, subtitle }: { families: ReturnType<ty
         {[['Process Lifecycle','Manage AI from ideation to retirement.'],['Intelligence','Turn data into intelligence with AI/ML and analytics.'],['Flow','Orchestrate workflows and automation.'],['Yield','Drive measurable outcomes and maximize impact.']].map(([title, body], i) => <div key={title} className="flex gap-3 bg-[#06132d] p-4"><Workflow className={`h-7 w-7 shrink-0 ${['text-cyan-400','text-blue-400','text-fuchsia-400','text-amber-400'][i]}`}/><div><h3 className="text-sm font-bold text-cyan-300">{title}</h3><p className="mt-1 text-[11px] leading-4 text-slate-300">{body}</p></div></div>)}
       </div>
       <h2 className="relative mt-5 text-center text-lg font-semibold">Why Enterprises Choose <span className="text-cyan-400">AIMPLIFY</span></h2>
-      <div className="relative mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">{benefits.map(({ icon: Icon, title, body }, i) => <article key={title} className="rounded-xl border border-blue-400/25 bg-[#06132d]/90 p-4 text-center"><Icon className={`mx-auto h-8 w-8 ${['text-cyan-400','text-sky-400','text-violet-400','text-amber-400','text-cyan-400','text-teal-400'][i]}`}/><h3 className="mt-3 text-xs font-bold leading-4">{title}</h3><p className="mt-2 text-[10px] leading-4 text-slate-300">{body}</p></article>)}</div>
+      <div className="relative mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">{why.benefits.map(({ icon_key, title, body }, i) => { const Icon = BENEFIT_ICONS[icon_key] ?? Target; return <article key={title} className="rounded-xl border border-blue-400/25 bg-[#06132d]/90 p-4 text-center"><Icon className={`mx-auto h-8 w-8 ${['text-cyan-400','text-sky-400','text-violet-400','text-amber-400','text-cyan-400','text-teal-400'][i]}`}/><h3 className="mt-3 text-xs font-bold leading-4">{title}</h3><p className="mt-2 text-[10px] leading-4 text-slate-300">{body}</p></article>; })}</div>
       <p className="relative mt-5 text-center text-xs font-semibold uppercase tracking-[.35em] text-cyan-400">One Platform. Every Model. Every Process. Every Outcome.</p>
     </section>
   </main>;
@@ -144,7 +56,7 @@ function InfographicWhy({ families, title, subtitle }: { families: ReturnType<ty
 export function WhyAimplify() {
   const revealRefs = useRef<(HTMLDivElement | null)[]>([]);
   const { families } = useFamilies();
-  const { banners } = usePortalSettings();
+  const { banners, why } = usePortalSettings();
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -194,7 +106,7 @@ export function WhyAimplify() {
           <div style={{ fontFamily: 'Poppins, sans-serif', fontSize: '0.75rem', fontWeight: 700, color: '#0066cc', letterSpacing: '0.14em', textTransform: 'uppercase', lineHeight: '40px', marginBottom: '0.25rem' }}>Executive Summary</div>
           {/* Body Secondary */}
           <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: '1.125rem', fontWeight: 400, color: '#374151', lineHeight: '1.67', textAlign: 'justify', margin: 0 }}>
-            AImplify exists to transform individual ideas and customer insights into shared organizational capabilities. It is a structured platform where InfoVisioners collaborate on real customer problems, generate reusable IP and accelerators, learn from one another, and build assets that strengthen delivery, sales, innovation, and customer outcomes across the enterprise. AImplify is the key accelerant in InfoVision's journey toward becoming an AI-Native organization - for our people, and for our customers.
+            {why.executive_summary}
           </p>
         </div>
       </div>
@@ -230,16 +142,16 @@ export function WhyAimplify() {
           <div ref={addRef(0)} className="opacity-0 translate-y-6 transition-all duration-500" style={{ textAlign: 'center', marginBottom: '3.5rem' }}>
             {/* H2 — Poppins Regular 50pt */}
             <h2 style={{ fontFamily: 'Poppins, sans-serif', fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 400, color: '#111827', lineHeight: '1.4' }}>
-              Key reasons AImplify matters to InfoVision
+              {why.pillars_heading}
             </h2>
             {/* Body — Rubik */}
             <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: '1.125rem', fontWeight: 400, color: '#6b7280', maxWidth: 560, margin: '0.5rem auto 0', lineHeight: '1.67' }}>
-              From culture to customer traction, each pillar addresses a distinct and urgent organizational need.
+              {why.pillars_subheading}
             </p>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
-            {pillars.map((p, i) => (
+            {why.pillars.map((p, i) => (
               <div key={i} ref={addRef(i + 1)}
                 className="opacity-0 translate-y-6 transition-all duration-500"
                 style={{ background: '#ffffff', padding: '2rem', position: 'relative', transition: 'box-shadow 0.22s ease', cursor: 'default', border: '1px solid #e5e7eb' }}
@@ -270,17 +182,17 @@ export function WhyAimplify() {
 
       {/* Outcomes Band */}
       <div style={{ background: '#ffffff', padding: '4rem 1.5rem', textAlign: 'center', borderTop: '1px solid #e5e7eb' }}>
-        <div ref={addRef(pillars.length + 1)} className="opacity-0 translate-y-6 transition-all duration-500" style={{ maxWidth: 700, margin: '0 auto' }}>
+        <div ref={addRef(why.pillars.length + 1)} className="opacity-0 translate-y-6 transition-all duration-500" style={{ maxWidth: 700, margin: '0 auto' }}>
           {/* H2 — Poppins Regular */}
           <h2 style={{ fontFamily: 'Poppins, sans-serif', fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 400, color: '#111827', lineHeight: '1.4', marginBottom: '1rem' }}>
-            One platform. Many outcomes.
+            {why.outcomes_heading}
           </h2>
           {/* Body — Rubik */}
           <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: '1.125rem', fontWeight: 400, color: '#6b7280', lineHeight: '1.67', marginBottom: '2rem' }}>
-            AImplify creates a flywheel. Teams contribute use cases. Those become accelerators. Accelerators win customers. Customer wins generate new problems. Problems generate new ideas. The loop compounds.
+            {why.outcomes_body}
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', justifyContent: 'center' }}>
-            {chips.map((chip, i) => (
+            {why.chips.map((chip, i) => (
               <span key={i} style={{ fontFamily: 'Poppins, sans-serif', fontSize: '0.8rem', fontWeight: 400, background: '#f0f7ff', border: '1px solid #bfdbfe', borderRadius: 100, padding: '6px 14px', color: '#0066cc', cursor: 'default', transition: 'background 0.18s' }}
                 onMouseEnter={e => { (e.currentTarget as HTMLSpanElement).style.background = '#dbeafe'; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLSpanElement).style.background = '#f0f7ff'; }}>
@@ -293,22 +205,20 @@ export function WhyAimplify() {
 
       {/* Closing */}
       <div style={{ background: '#f8fafc', padding: '5rem 1.5rem', textAlign: 'center', borderTop: '1px solid #e5e7eb' }}>
-        <div ref={addRef(pillars.length + 2)} className="opacity-0 translate-y-6 transition-all duration-500" style={{ maxWidth: 720, margin: '0 auto' }}>
+        <div ref={addRef(why.pillars.length + 2)} className="opacity-0 translate-y-6 transition-all duration-500" style={{ maxWidth: 720, margin: '0 auto' }}>
           {/* H2 — Poppins Regular */}
           <h2 style={{ fontFamily: 'Poppins, sans-serif', fontSize: 'clamp(1.6rem, 3.5vw, 2.2rem)', fontWeight: 400, color: '#111827', lineHeight: '1.4', marginBottom: '1.2rem' }}>
-            We are not just building a platform.<br />We are building InfoVision's future.
+            {why.closing.heading.split('\n').map((line, i) => <span key={i}>{line}{i === 0 && <br />}</span>)}
           </h2>
           <div style={{ width: 48, height: 3, background: 'linear-gradient(90deg, #0066cc, #00ccaa)', borderRadius: 4, margin: '2rem auto' }} />
-          {/* Body — Rubik */}
           <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: '1.125rem', fontWeight: 400, color: '#6b7280', lineHeight: '1.67', marginBottom: '0.6rem' }}>
-            The organizations that win the next decade will not be the ones with the largest headcount or the most tools. They will be the ones that learn fastest, build reusably, and bring proven capabilities to every conversation.
+            {why.closing.body1}
           </p>
           <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: '1.125rem', fontWeight: 400, color: '#6b7280', lineHeight: '1.67', marginBottom: '1.5rem' }}>
-            AImplify Outcome. is how InfoVision does all three - simultaneously, at scale, and in a way that our customers can see and feel.
+            {why.closing.body2}
           </p>
-          {/* Body Secondary — Droid Serif italic */}
           <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: '1.125rem', fontWeight: 400, color: '#374151', fontStyle: 'italic', lineHeight: '1.67' }}>
-            "The platform becomes the proof. The proof becomes the pipeline."
+            {why.closing.quote}
           </p>
         </div>
       </div>

@@ -31,3 +31,13 @@ uploads/
 .DS_Store
 Thumbs.db
 
+
+# Local tools, generated verification artifacts and packages
+.codex/
+.codex_tmp/
+.worktrees/
+outputs/
+_qa_*
+ci_artifacts/
+backend-release/
+!.env.example

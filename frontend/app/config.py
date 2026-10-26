@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from functools import lru_cache
 from pydantic import AliasChoices, Field
@@ -66,10 +67,35 @@ class Settings(BaseSettings):
     )
     aiv_ideations_collection: str = Field("cic_pipeline", description="AIV approval-pipeline collection")
 
+    # Aimplify Knowledge Bot — reuses the shared AIV vector DB (same Mongo cluster as
+    # AIV_MONGODB_URL). Working assumptions are ASSUMED-unconfirmed — see
+    # docs/knowledge-bot-plan.md §7a. Kept as separate settings (not hardcoded) so
+    # correcting the collection name or swapping to a distinct credential later is a
+    # config change, not a code change.
+    chatbot_enabled: bool = Field(True, description="Show the chatbot and accept chat requests")
+    aimplify_knowledge_collection: str = Field(
+        "aimplify_knowledge", description="Dedicated collection/index for the Aimplify knowledge bot within the shared AIV vector DB"
+    )
+    aimplify_vector_index_name: str = Field(
+        "aimplify_knowledge_vector_index", description="Atlas Vector Search index name on the aimplify_knowledge collection"
+    )
+    aimplify_search_index_name: str = Field(
+        "aimplify_knowledge_search_index", description="Atlas Search (full-text) index name on the aimplify_knowledge collection"
+    )
+    gemini_embedding_model: str = Field(
+        "gemini-embedding-001", description="Gemini embedding model used to index and query the Aimplify knowledge base"
+    )
+    gemini_embedding_dimensions: int = Field(
+        768, description="Output dimensionality requested from the Gemini embedding model — must match the Atlas Vector Search index's numDimensions"
+    )
+
+    evaluation_worker_enabled: bool = Field(True)
+
     # App
     debug: bool = Field(False)
     dev_auth_bypass: bool = Field(False, description="Enable /auth/dev-login endpoint (local only)")
     frontend_url: str = Field("http://localhost:5173")
+    quality_report_allowed_hosts: str = Field("", description="Comma-separated exact public hosts approved for optional quality-report URL checks")
 
 
 async def load_secrets(settings: Settings) -> None:
@@ -98,7 +124,7 @@ async def load_secrets(settings: Settings) -> None:
 
     async with DefaultAzureCredential() as credential:
         async with SecretClient(vault_url=settings.azure_keyvault_url, credential=credential) as client:
-            for secret_name, field_name in secret_field_map.items():
+            async def load_one(secret_name: str, field_name: str) -> None:
                 try:
                     secret = await client.get_secret(secret_name)
                     if secret.value:
@@ -106,6 +132,14 @@ async def load_secrets(settings: Settings) -> None:
                         logger.debug("Loaded secret '%s' from Key Vault.", secret_name)
                 except Exception as exc:
                     logger.warning("Could not load secret '%s': %s", secret_name, exc)
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(load_one(name, field) for name, field in secret_field_map.items())),
+                    timeout=45,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Key Vault secret loading exceeded 45 seconds; using available app settings.")
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

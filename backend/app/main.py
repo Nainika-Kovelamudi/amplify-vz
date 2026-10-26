@@ -22,7 +22,6 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings, load_secrets
-from app.db.base import get_engine
 from app.routers import (
     admin,
     audit,
@@ -54,35 +53,21 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     await load_secrets(settings)
 
-    engine = get_engine()  # initialise connection pool at startup
-    # Azure App Service can be configured with a custom startup command that
-    # bypasses startup.sh. Keep this small, idempotent guard so deployments
-    # cannot run new AIV-mapping models against an older database schema.
-    from sqlalchemy import text
-    async with engine.begin() as connection:
-        await connection.execute(text(
-            "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS aiv_ideation_id VARCHAR"
-        ))
-        await connection.execute(text(
-            "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS aiv_ideation_title VARCHAR"
-        ))
-        await connection.execute(text(
-            "ALTER TABLE catalog_assets ADD COLUMN IF NOT EXISTS aiv_ideation_id VARCHAR"
-        ))
-        await connection.execute(text(
-            "ALTER TABLE catalog_assets ADD COLUMN IF NOT EXISTS aiv_ideation_title VARCHAR"
-        ))
-        await connection.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_submissions_aiv_ideation_id ON submissions (aiv_ideation_id)"
-        ))
-        await connection.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_catalog_assets_aiv_ideation_id ON catalog_assets (aiv_ideation_id)"
-        ))
-    logger.info("AIV ideation mapping schema verified.")
     from app.services.executive_report_service import run_executive_report_scheduler
     report_scheduler_task = asyncio.create_task(run_executive_report_scheduler())
     logger.info("Amplify API started — debug=%s", settings.debug)
+    from app.services.evaluation_jobs import run_evaluation_worker
+    evaluation_task = asyncio.create_task(run_evaluation_worker())
+    from app.services.knowledge.startup import initialize_knowledge
+    knowledge_task = asyncio.create_task(initialize_knowledge())
     yield
+    knowledge_task.cancel()
+    try:
+        await knowledge_task
+    except asyncio.CancelledError:
+        pass
+    evaluation_task.cancel()
+    await asyncio.gather(evaluation_task, return_exceptions=True)
     report_scheduler_task.cancel()
     try:
         await report_scheduler_task
@@ -179,6 +164,8 @@ def create_app() -> FastAPI:
             content={"detail": "The server could not complete the request. Check the backend logs for the recorded exception."},
         )
 
+    from app.routers import assistant
+    app.include_router(assistant.router)
     app.include_router(auth.router)
     app.include_router(catalog.router)
     app.include_router(submissions.router)
@@ -188,7 +175,13 @@ def create_app() -> FastAPI:
     app.include_router(feedback.router)
     app.include_router(likes.router)
     app.include_router(admin.router)
+    from app.routers.platform_operations import router as platform_operations_router
+    app.include_router(platform_operations_router)
     app.include_router(users.router)
+    from app.routers.security_report import router as security_report_router
+    app.include_router(security_report_router)
+    from app.routers.security_report import quality_router
+    app.include_router(quality_router)
     app.include_router(audit.router)
     app.include_router(media.router)
     app.include_router(notifications.router)

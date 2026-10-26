@@ -13,6 +13,7 @@ from app.db.models import ActivityLog, AssetStatus, CatalogAsset, CloneRequest, 
 from app.deps.rbac import require_role
 from app.schemas.admin import AdminStatsResponse, ApprovalActionRequest
 from app.schemas.submission import SubmissionListResponse, SubmissionResponse
+from app.services.blob_service import refresh_sas_url
 from app.services.notification_service import push_notification
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def _sub_to_response(s: Submission) -> SubmissionResponse:
         cloud_provider=s.cloud_provider,
         maturity=s.maturity,
         demo_ready=s.demo_ready,
-        video_url=s.video_url,
+        video_url=refresh_sas_url(s.video_url),
         status=s.status.value if hasattr(s.status, "value") else s.status,
         ai_score=s.ai_score,
         ai_feedback=s.ai_feedback,

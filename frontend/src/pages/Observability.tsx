@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { downloadObservabilityReport, getAdminStats, getAuditLogs, getUsers, exportAuditLogsUrl, type AdminStats, type AuditLog, type AppUser, type ExecutiveReportFormat } from '../lib/adminService';
 import { getCatalog, type CatalogAsset } from '../lib/catalogService';
 import { usePortalSettings } from '../context/PortalSettingsContext';
+import { AssetQualityReport } from '../components/admin/AssetQualityReport';
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-gray-100 ${className ?? ''}`} />;
@@ -179,6 +180,8 @@ export function Observability() {
         }
       });
       setUserActivity(Object.values(userMap).sort((a, b) => b.actions - a.actions));
+    } catch {
+      // Keep previously loaded data visible if a dashboard request times out.
     } finally {
       setLoading(false);
     }
@@ -291,7 +294,8 @@ export function Observability() {
             </h1>
             <p className="text-xs text-gray-400 mt-0.5">{banners.observability.subtitle}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <AssetQualityReport />
             <select
               value={reportFormat}
               onChange={(event) => setReportFormat(event.target.value as ExecutiveReportFormat)}

@@ -1,0 +1,114 @@
+name: Deploy AImplify
+on:
+  push:
+    branches: [aimplify-dev]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment (production requires configured branch)
+        type: choice
+        options: [development, production]
+        default: development
+permissions:
+  contents: read
+concurrency:
+  group: deploy-${{ inputs.environment || 'development' }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'development' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VITE_ASSET_OPERATIONS_ENABLED: ${{ vars.VITE_ASSET_OPERATIONS_ENABLED }}
+      VITE_API_URL: ${{ vars.VITE_API_URL }}
+      VITE_AZURE_TENANT_ID: ${{ vars.VITE_AZURE_TENANT_ID }}
+      VITE_AZURE_CLIENT_ID: ${{ vars.VITE_AZURE_CLIENT_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_BACKEND_APP: ${{ vars.AZURE_BACKEND_APP }}
+      DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH }}
+      FRONTEND_HOST: ${{ vars.FRONTEND_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate environment and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in VITE_API_URL VITE_AZURE_TENANT_ID VITE_AZURE_CLIENT_ID AZURE_RESOURCE_GROUP AZURE_BACKEND_APP DEPLOY_BRANCH FRONTEND_HOST; do
+            test -n "${!name}" || { echo "Missing environment variable: $name"; exit 1; }
+          done
+          test "$GITHUB_REF" = "refs/heads/$DEPLOY_BRANCH" || { echo 'Deployment branch is not authorized'; exit 1; }
+          case "$FRONTEND_HOST" in static-web-app|app-service) ;; *) echo 'Unsupported FRONTEND_HOST'; exit 1;; esac
+          if [ "$FRONTEND_HOST" = app-service ]; then
+            test -n "$AZURE_FRONTEND_APP" || { echo 'Missing AZURE_FRONTEND_APP'; exit 1; }
+          fi
+        env:
+          AZURE_FRONTEND_APP: ${{ vars.AZURE_FRONTEND_APP }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-${{ github.sha }}
+          path: ci_artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build:prod
+        working-directory: frontend
+      - run: cp frontend/staticwebapp.config.json frontend/dist_prod/staticwebapp.config.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare exact backend artifact
+        run: |
+          python -m zipfile -e ci_artifacts/backend.zip backend-release
+          pip install -r backend-release/requirements.txt
+      - name: Migrate database before deploying application
+        working-directory: backend-release
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          JWT_SECRET: migration-only-placeholder-not-an-app-signing-key
+          AZURE_TENANT_ID: ${{ vars.VITE_AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.VITE_AZURE_CLIENT_ID }}
+        run: |
+          test -n "$DATABASE_URL" || { echo 'Missing DATABASE_URL environment secret'; exit 1; }
+          python -m alembic upgrade head
+          python -m alembic current
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Enable Azure Python build
+        run: |
+          az webapp config appsettings set -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_BACKEND_APP" --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true --output none
+          az webapp config set -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_BACKEND_APP" --startup-file 'bash startup.sh' --output none
+      - uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_BACKEND_APP }}
+          package: ci_artifacts/backend.zip
+      - name: Verify backend and required routes
+        run: python backend/scripts/smoke_deployment.py "$VITE_API_URL"
+      - name: Deploy Static Web App frontend
+        if: env.FRONTEND_HOST == 'static-web-app'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: upload
+          app_location: frontend/dist_prod
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
+      - name: Deploy App Service frontend
+        if: env.FRONTEND_HOST == 'app-service'
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_FRONTEND_APP }}
+          package: frontend/dist_prod

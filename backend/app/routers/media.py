@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
+from azure.storage.blob.aio import BlobServiceClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from starlette.requests import ClientDisconnect
@@ -14,7 +15,7 @@ from starlette.requests import ClientDisconnect
 from app.config import get_settings
 from app.db.base import get_db
 from app.deps.rbac import require_role
-from app.services.blob_service import delete_blob, make_blob_name, make_direct_upload_urls, upload_blob, upload_blob_stream
+from app.services.blob_service import delete_blob, make_blob_name, make_direct_upload_urls, make_html_attachment_url, upload_blob, upload_blob_stream
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/media", tags=["Media"])
@@ -34,12 +35,17 @@ ALLOWED_DOC_TYPES = {
     "image/png",
     "image/jpeg",
     "image/svg+xml",
+    "text/html",
+    "text/javascript",
+    "application/javascript",
+    "application/x-javascript",
+    "text/x-javascript",
     "application/octet-stream",  # browsers/OS may send this for any binary file
 }
 
 ALLOWED_DOC_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
-    ".png", ".jpg", ".jpeg", ".svg",
+    ".png", ".jpg", ".jpeg", ".svg", ".html", ".htm", ".js",
 }
 
 # Local uploads dir as fallback when blob storage not configured
@@ -68,10 +74,15 @@ def _validate_raw(content_type: str, filename: str, media_type: str) -> None:
         if not mime.startswith("image/"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be an image.")
     elif media_type == "document":
+        if (ext in (".html", ".htm") and mime not in ("text/html", "application/octet-stream")) or (mime == "text/html" and ext not in (".html", ".htm")):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="HTML uploads must use an .html or .htm filename.")
+        js_types = ("text/javascript", "application/javascript", "application/x-javascript", "text/x-javascript")
+        if (ext == ".js" and mime not in (*js_types, "text/plain", "application/octet-stream")) or (mime in js_types and ext != ".js"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JavaScript uploads must use a .js filename.")
         if mime not in ALLOWED_DOC_TYPES and ext not in ALLOWED_DOC_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported file type '{ext or mime}'. Allowed: PDF, DOCX, DOC, XLSX, XLS, PPTX, PPT, or image.",
+                detail=f"Unsupported file type '{ext or mime}'. Allowed: PDF, DOCX, DOC, XLSX, XLS, PPTX, PPT, image, HTML, or JS.",
             )
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown media_type '{media_type}'.")
@@ -201,6 +212,60 @@ async def upload_media(
     return {"url": url, "blob_path": blob_name}
 
 
+@router.get("/html-download-url")
+async def html_download_url(
+    blob_path: str = Query(...),
+    filename: str = Query(""),
+    user=require_role("Aimplify.User", "Aimplify.Admin", "Aimplify.Owner"),
+) -> dict[str, str]:
+    """Return a five-minute Blob URL that downloads HTML instead of rendering it."""
+    from urllib.parse import unquote
+
+    path = unquote(blob_path).lstrip("/")
+    container, separator, name = path.partition("/")
+    if container != "artifacts" or not separator or not name.lower().endswith((".html", ".htm")):
+        raise HTTPException(status_code=400, detail="Only HTML collateral can be downloaded here.")
+    try:
+        return {"url": make_html_attachment_url(name, filename)}
+    except RuntimeError as exc:
+        logger.warning("Could not create HTML download URL: %s", exc)
+        raise HTTPException(status_code=503, detail="Direct HTML download is not configured.")
+
+
+@router.get("/download-html")
+async def download_html_collateral(
+    blob_path: str = Query(...),
+    user=require_role("Aimplify.User", "Aimplify.Admin", "Aimplify.Owner"),
+) -> Response:
+    """Download untrusted HTML as data; never render it on the portal origin."""
+    from urllib.parse import unquote
+
+    path = unquote(blob_path).lstrip("/")
+    container, separator, name = path.partition("/")
+    if container != "artifacts" or not separator or not name.lower().endswith((".html", ".htm")):
+        raise HTTPException(status_code=400, detail="Only HTML collateral can be downloaded here.")
+    settings = get_settings()
+    if not settings.blob_connection_string:
+        raise HTTPException(status_code=503, detail="Blob storage is not configured.")
+    try:
+        async with BlobServiceClient.from_connection_string(settings.blob_connection_string) as client:
+            blob = client.get_blob_client(container=container, blob=name)
+            properties = await blob.get_blob_properties()
+            if properties.size > MAX_DOC_BYTES:
+                raise HTTPException(status_code=413, detail="HTML file exceeds the 50 MB limit.")
+            data = await (await blob.download_blob()).readall()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("HTML collateral download failed: %s", exc)
+        raise HTTPException(status_code=502, detail="HTML collateral could not be downloaded.")
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
+    )
+
+
 @router.get("/local/{filename:path}")
 async def serve_local_file(filename: str) -> StreamingResponse:
     path = os.path.join(_LOCAL_UPLOADS_DIR, filename)
@@ -224,6 +289,11 @@ async def serve_local_file(filename: str) -> StreamingResponse:
         ".svg": "image/svg+xml",
     }
     ct = ct_map.get(ext, "application/octet-stream")
+    if ext in (".html", ".htm"):
+        return StreamingResponse(
+            io.BytesIO(data), media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{os.path.basename(filename)}"', "X-Content-Type-Options": "nosniff"},
+        )
     return StreamingResponse(io.BytesIO(data), media_type=ct)
 
 

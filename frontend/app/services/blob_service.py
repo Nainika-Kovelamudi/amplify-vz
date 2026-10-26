@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator, Optional, Union
 
@@ -51,7 +52,10 @@ async def upload_blob_stream(
             stream,
             overwrite=True,
             length=length,
-            content_settings=ContentSettings(content_type=content_type),
+            content_settings=ContentSettings(
+                content_type=content_type,
+                content_disposition="attachment" if blob_name.lower().endswith((".html", ".htm", ".js")) else None,
+            ),
             max_concurrency=4,
         )
 
@@ -86,7 +90,10 @@ async def upload_blob(blob_name: str, data: bytes, content_type: str) -> str:
         await blob_client.upload_blob(
             data,
             overwrite=True,
-            content_settings=ContentSettings(content_type=content_type),
+            content_settings=ContentSettings(
+                content_type=content_type,
+                content_disposition="attachment" if blob_name.lower().endswith((".html", ".htm", ".js")) else None,
+            ),
         )
 
     # Return a 10-year SAS URL so stored URLs don't expire in practice
@@ -173,6 +180,30 @@ def make_direct_upload_urls(blob_name: str, expiry_minutes: int = 30) -> tuple[s
         account_key=settings.blob_account_key,
         expiry_hours=24 * 365 * 10,
     )
+
+
+def make_html_attachment_url(blob_name: str, download_name: str = "") -> str:
+    """Issue a short-lived direct download link that cannot render HTML inline."""
+    settings = get_settings()
+    if not settings.blob_account_name or not settings.blob_account_key:
+        raise RuntimeError("Blob account name/key are required for direct downloads.")
+    filename = os.path.basename(download_name or blob_name).replace('"', "").replace("\r", "").replace("\n", "")
+    if not filename.lower().endswith((".html", ".htm")):
+        filename = os.path.basename(blob_name)
+    token = generate_blob_sas(
+        account_name=settings.blob_account_name,
+        container_name=CONTAINER,
+        blob_name=blob_name,
+        account_key=settings.blob_account_key,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.now(tz=timezone.utc) + timedelta(minutes=5),
+        content_disposition=f'attachment; filename="{filename}"',
+        content_type="application/octet-stream",
+        cache_control="no-store",
+    )
+    from urllib.parse import quote
+
+    return f"https://{settings.blob_account_name}.blob.core.windows.net/{CONTAINER}/{quote(blob_name, safe='/')}?{token}"
 
 
 def make_blob_name(

@@ -1,10 +1,12 @@
 from datetime import datetime
 from typing import Optional, List, Any
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
+from app.schemas.metadata_rules import MetadataRules, require_create_metadata
 
 
-class SubmissionCreate(BaseModel):
+class SubmissionCreate(MetadataRules):
+    _required = model_validator(mode="after")(require_create_metadata)
     aiv_ideation_id: Optional[str] = None
     title: str
     description: str
@@ -35,7 +37,7 @@ class SubmissionCreate(BaseModel):
     catalog_asset_id: Optional[str] = None
 
 
-class SubmissionUpdate(BaseModel):
+class SubmissionUpdate(MetadataRules):
     aiv_ideation_id: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
@@ -102,6 +104,14 @@ class SubmissionResponse(BaseModel):
     assigned_reviewer_name: Optional[str] = None
     assigned_reviewer_email: Optional[str] = None
     assigned_at: Optional[datetime] = None
+    reviewed_by: Optional[UUID] = None
+    reviewed_by_name: Optional[str] = None
+    reviewed_by_email: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    published_by: Optional[UUID] = None
+    published_by_name: Optional[str] = None
+    published_by_email: Optional[str] = None
+    published_at: Optional[datetime] = None
 
 
 class SubmissionListResponse(BaseModel):

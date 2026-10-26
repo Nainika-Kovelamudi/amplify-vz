@@ -1,3 +1,8 @@
+import { FamilyEditor } from '../components/admin/FamilyEditor';
+import { evaluationWeights } from '../lib/evaluationDisplay';
+import { ScoreCapDetails } from '../components/admin/ScoreCapDetails';
+import { AssetEvaluationRerun } from '../components/admin/AssetEvaluationRerun';
+import { AssetReviewHistory } from '../components/catalog/AssetReviewHistory';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -14,6 +19,8 @@ import { getCatalogAsset, getCatalog, toggleAssetLike, trackArtifactDownload, tr
 import { useAuth } from '../context/AuthContext';
 import { requestClone, resendCloneLink, getMyCloneRequests, getAllCloneRequests, type CloneRequest } from '../lib/cloneService';
 import { createDemoRequest, getAllDemoRequests, getMyDemoRequests, type DemoRequest } from '../lib/demoRequestService';
+import { VoiceInputButton } from '../components/comments/VoiceInputButton';
+import { downloadHtmlCollateral, isAmplifyBlobUrl } from '../lib/mediaService';
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 interface Toast { id: number; type: 'success' | 'error' | 'info'; title: string; message: string }
@@ -74,6 +81,8 @@ const AGENT_META: Record<string, { label: string; icon: string; weight: number; 
   description:     { label: 'Description',     icon: '📝', weight: 15, desc: 'Clarity, completeness and discoverability' },
   demo_readiness:  { label: 'Demo Readiness',  icon: '🎬', weight: 20, desc: 'Client-presentable, demo video, maturity, setup complexity' },
   duplicate_check: { label: 'Duplicate Check', icon: '🔍', weight: 10, desc: 'Novelty vs existing catalog assets' },
+  document_validation: { label: 'Document Validation', icon: '📄', weight: 13, desc: 'Supporting documents, relevance and completeness' },
+  video_validation: { label: 'Video Validation', icon: '📹', weight: 12, desc: 'Demo video availability and relevance' },
 };
 
 function formatDate(iso: string) {
@@ -688,7 +697,8 @@ export function AssetDetail() {
                     {fbError && (
                       <p className="text-xs font-medium text-rose-500">{fbError}</p>
                     )}
-                    <div className="flex justify-end">
+                    <div className="flex items-start justify-end gap-2">
+                      <VoiceInputButton onTranscript={text => setFbComment(previous => `${previous}${previous.trim() ? ' ' : ''}${text}`)} disabled={fbSubmitting} />
                       <button
                         onClick={handleFeedbackSubmit}
                         disabled={fbSubmitting}
@@ -743,7 +753,7 @@ export function AssetDetail() {
                 marketing_collateral: 'Marketing Collateral',
                 technical_delivery:   'Technical Delivery Doc',
               };
-              let docSlots: { key: string; label: string; url: string }[] = [];
+              let docSlots: { key: string; label: string; url: string; name?: string }[] = [];
               let legacyUrl = '';
               try {
                 const parsed = JSON.parse(archRaw);
@@ -751,6 +761,11 @@ export function AssetDetail() {
                   docSlots = Object.entries(DOC_SLOT_LABELS).map(([key, label]) => ({
                     key, label, url: (parsed[key] as string) ?? '',
                   }));
+                  if (Array.isArray(parsed.miscellaneous)) {
+                    parsed.miscellaneous.forEach((file: { url?: string; name?: string }, index: number) => {
+                      if (file && typeof file.url === 'string' && file.url) docSlots.push({ key: `miscellaneous-${index}`, label: 'Miscellaneous Collateral', url: file.url, name: file.name });
+                    });
+                  }
                 } else {
                   legacyUrl = archRaw;
                 }
@@ -767,9 +782,10 @@ export function AssetDetail() {
                 return raw.replace(/.*[0-9a-f]{32}_/i, '') || raw;
               };
 
-              const DocRow = ({ label, url }: { label: string; url: string }) => {
+              const DocRow = ({ label, url, name }: { label: string; url: string; name?: string }) => {
                 const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
                 const isImg = IMAGE_EXTS.includes(ext);
+                const isHtml = ext === 'html' || ext === 'htm';
                 return (
                   <div className="flex items-center gap-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-xl shadow-sm border border-gray-100">
@@ -777,13 +793,23 @@ export function AssetDetail() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">{label}</p>
-                      <p className="truncate text-sm font-medium text-gray-700">{friendlyName(url)}</p>
+                      <p className="truncate text-sm font-medium text-gray-700">{name || friendlyName(url)}</p>
                     </div>
-                    <a href={url} target="_blank" rel="noreferrer" download={isImg ? undefined : friendlyName(url)}
-                      onClick={() => trackArtifactDownload(asset.id).then(() => setDownloadCount(c => c + 1))}
-                      className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 transition-colors">
-                      <Download className="h-3.5 w-3.5" />{isImg ? 'View' : 'Download'}
-                    </a>
+                    {isHtml && isAmplifyBlobUrl(url) ? (
+                      <button type="button" onClick={() => {
+                        void downloadHtmlCollateral(url, name || friendlyName(url))
+                          .then(() => trackArtifactDownload(asset.id).then(() => setDownloadCount(c => c + 1)))
+                          .catch((error: unknown) => addToast('error', 'Download failed', error instanceof Error ? error.message : 'HTML collateral could not be downloaded.'));
+                      }} className="shrink-0 inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 transition-colors">
+                        <Download className="h-3.5 w-3.5" />Download
+                      </button>
+                    ) : (
+                      <a href={url} target="_blank" rel="noreferrer" download={isImg ? undefined : (name || friendlyName(url))}
+                        onClick={() => trackArtifactDownload(asset.id).then(() => setDownloadCount(c => c + 1))}
+                        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 transition-colors">
+                        <Download className="h-3.5 w-3.5" />{isImg ? 'View' : 'Download'}
+                      </a>
+                    )}
                   </div>
                 );
               };
@@ -797,9 +823,9 @@ export function AssetDetail() {
                   </h2>
                   {docSlots.length > 0 ? (
                     <div className="space-y-3">
-                      {docSlots.map(({ key, label, url }) =>
+                      {docSlots.map(({ key, label, url, name }) =>
                         url
-                          ? <DocRow key={key} label={label} url={url} />
+                          ? <DocRow key={key} label={label} url={url} name={name} />
                           : (
                             <div key={key} className="flex items-center gap-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4 text-sm text-gray-400">
                               <span className="text-base">📎</span>
@@ -1069,6 +1095,8 @@ export function AssetDetail() {
             {/* ── AI EVALUATION — admin, owner role, or asset submitter only ── */}
             {activeTab === 'ai' && (isAdmin || isAssetOwner) && (
               <>
+                {user?.role === 'Aimplify.Owner' && <AssetEvaluationRerun key={asset.id} assetId={asset.id}
+                  onRefresh={async () => { const updated = await getCatalogAsset(asset.slug); setAsset(updated); }} />}
                 {aiScore !== null && aiScore > 0 ? (
                   <>
                     {/* Score hero */}
@@ -1100,7 +1128,9 @@ export function AssetDetail() {
                           <p className="mt-0.5 text-xs text-gray-400">Each agent score contributes its weighted % to the composite</p>
                         </div>
                         <div className="divide-y divide-gray-50">
-                          {Object.entries(AGENT_META).map(([key, cfg]) => {
+                          <div className="px-5"><ScoreCapDetails feedback={aiFb} /></div>
+                          {Object.entries(AGENT_META).filter(([key]) => key in evaluationWeights(aiFb)).map(([key, original]) => {
+                              const cfg = { ...original, weight: evaluationWeights(aiFb)[key] };
                             const score = agentScores[key] ?? 0;
                             const contrib = (cfg.weight * score) / 100;
                             const fb = agentFeedback?.[key];
@@ -1194,14 +1224,16 @@ export function AssetDetail() {
               )}
             </div>
 
+            {isAdmin && <FamilyEditor id={asset.id} kind="catalog" currentFamily={asset.family}
+              onSaved={family => setAsset(current => current ? { ...current, family } : current)} />}
+
             {/* Owner + Contributors card */}
-            {asset.owner_name && (
-              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Asset Owner</h3>
+            <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Owner &amp; Review</h3>
                 <div className="flex items-center gap-3 mb-3">
-                  <InitialsAvatar name={asset.owner_name} />
+                  <InitialsAvatar name={asset.owner_name || asset.owner_email || 'Owner'} />
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-800 truncate">{asset.owner_name}</p>
+                    <p className="text-sm font-semibold text-gray-800 truncate">{asset.owner_name || asset.owner_email || 'Owner details unavailable'}</p>
                     {asset.owner_email && (
                       <p className="text-[11px] text-gray-400 truncate">{asset.owner_email}</p>
                     )}
@@ -1210,6 +1242,7 @@ export function AssetDetail() {
                     )}
                   </div>
                 </div>
+                <AssetReviewHistory key={asset.id} assetId={asset.id} />
                 {asset.manager_name && (
                   <div className="border-t border-gray-50 pt-3">
                     <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Reports to</p>
@@ -1244,7 +1277,6 @@ export function AssetDetail() {
                   </div>
                 )}
               </div>
-            )}
 
             {/* Changelog */}
             <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">

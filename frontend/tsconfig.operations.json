@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": [
+    "src/components/admin/ReportUI.tsx",
+    "src/components/admin/SecurityEvidenceReport.tsx",
+    "src/components/admin/AssetQualityReport.tsx",
+    "src/components/admin/PlatformOperations.tsx",
+    "src/lib/evaluationDisplay.ts",
+    "src/components/admin/FamilyEditor.tsx",
+    "src/components/admin/ScoreCapDetails.tsx",
+    "src/components/admin/AssetEvaluationRerun.tsx",
+    "src/components/catalog/AssetReviewHistory.tsx",
+    "src/pages/ExecutiveReports.tsx",
+    "src/components/demo/PlatformRequests.tsx",
+    "src/components/demo/PlatformFeedbackList.tsx",
+    "src/vite-env.d.ts"
+  ]
+}

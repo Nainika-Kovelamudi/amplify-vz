@@ -1,4 +1,4 @@
-import { type ElementType, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ElementType, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, BarChart3, CheckCircle2, Clock3, Download,
   Eye, FileCheck2, GitBranch, LogIn, Mail, RefreshCw, Rocket, RotateCcw, Send, Sparkles, Trophy, Users,
@@ -79,15 +79,17 @@ export function ExecutiveReports() {
   const [mailStatus, setMailStatus] = useState('');
   const [reportFormat, setReportFormat] = useState<ExecutiveReportFormat>('pdf');
 
-  const load = useCallback(() => {
+  const requestSequence = useRef(0);
+  const load = useCallback((refresh = false) => {
+    const sequence = ++requestSequence.current;
     setLoading(true); setError('');
-    getExecutiveReport(days)
-      .then(setReport)
-      .catch(() => setError('Executive report could not be loaded.'))
-      .finally(() => setLoading(false));
+    getExecutiveReport(days, refresh)
+      .then(data => { if (sequence === requestSequence.current) setReport(data); })
+      .catch(() => { if (sequence === requestSequence.current) setError('Executive report could not be loaded.'); })
+      .finally(() => { if (sequence === requestSequence.current) setLoading(false); });
   }, [days]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); return () => { requestSequence.current += 1; }; }, [load]);
 
   const downloadReport = async () => {
     setDownloading(true); setError('');
@@ -139,7 +141,7 @@ export function ExecutiveReports() {
             </select>
             <button onClick={() => void downloadReport()} disabled={downloading} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm disabled:opacity-50"><Download className="h-3.5 w-3.5" />{downloading ? 'Preparing…' : 'Download'}</button>
             <button onClick={() => void sendTestMail()} disabled={sendingTest} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm disabled:opacity-50"><Mail className="h-3.5 w-3.5" />{sendingTest ? 'Sending…' : 'Send Mail'}</button>
-            <button onClick={load} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+            <button onClick={() => load(true)} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
           </div>
         </div>
 

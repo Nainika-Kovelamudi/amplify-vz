@@ -1,10 +1,14 @@
 from datetime import datetime
 from uuid import UUID
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, field_validator
+
+CommentChannel = Literal["submitter", "internal"]
 
 
 class CommentCreate(BaseModel):
     body: str
+    channel: CommentChannel = "submitter"
 
     @field_validator("body")
     @classmethod
@@ -26,4 +30,5 @@ class CommentResponse(BaseModel):
     author_name: str
     author_email: str
     body: str
+    channel: CommentChannel
     created_at: datetime

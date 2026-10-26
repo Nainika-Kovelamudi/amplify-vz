@@ -21,8 +21,12 @@ from app.schemas.catalog import (
     PlatformFamilyResponse,
 )
 
+from app.services.family_assignment import FamilyUpdate, change_family
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Catalog"])
+from app.routers.catalog_review import router as catalog_review_router
+router.include_router(catalog_review_router)
 
 FAMILIES = ["Atlas", "Forge", "Sentinel", "Relay", "Nexus"]
 FAMILY_META: dict[str, dict] = {
@@ -214,7 +218,8 @@ async def list_catalog(
     if department:
         stmt = stmt.where(CatalogAsset.department == department)
     if cloud_provider:
-        stmt = stmt.where(CatalogAsset.cloud_provider == cloud_provider)
+        from app.schemas.metadata_rules import cloud_filter
+        stmt = stmt.where(cloud_filter(CatalogAsset.cloud_provider, cloud_provider))
     if maturity:
         stmt = stmt.where(CatalogAsset.maturity == maturity)
     if demo_ready is not None:
@@ -226,34 +231,30 @@ async def list_catalog(
     count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
     total = count_result.scalar_one()
 
-    clone_count = (
-        select(func.count(CloneRequest.id))
-        .where(CloneRequest.asset_id == CatalogAsset.id)
-        .correlate(CatalogAsset)
-        .scalar_subquery()
+    clone_stats = (
+        select(
+            CloneRequest.asset_id.label("asset_id"),
+            func.count(CloneRequest.id).label("clone_count"),
+            func.count(CloneRequest.id).filter(
+                CloneRequest.purpose == "Customer Demo",
+                CloneRequest.status == CloneStatus.Approved,
+            ).label("deployment_count"),
+        ).group_by(CloneRequest.asset_id).subquery()
     )
-    deployment_count = (
-        select(func.count(CloneRequest.id))
-        .where(
-            CloneRequest.asset_id == CatalogAsset.id,
-            CloneRequest.purpose == "Customer Demo",
-            CloneRequest.status == CloneStatus.Approved,
-        )
-        .correlate(CatalogAsset)
-        .scalar_subquery()
+    like_stats = (
+        select(AssetLike.asset_id.label("asset_id"), func.count(AssetLike.id).label("like_count"))
+        .group_by(AssetLike.asset_id).subquery()
     )
-    like_count = (
-        select(func.count(AssetLike.id))
-        .where(AssetLike.asset_id == CatalogAsset.id)
-        .correlate(CatalogAsset)
-        .scalar_subquery()
-    )
-    enriched_stmt = stmt.outerjoin(UserProfile, CatalogAsset.owner_id == UserProfile.id).add_columns(
+    enriched_stmt = (stmt
+        .outerjoin(UserProfile, CatalogAsset.owner_id == UserProfile.id)
+        .outerjoin(clone_stats, clone_stats.c.asset_id == CatalogAsset.id)
+        .outerjoin(like_stats, like_stats.c.asset_id == CatalogAsset.id)
+    ).add_columns(
         UserProfile.display_name.label("owner_display_name"),
         UserProfile.email.label("owner_profile_email"),
-        clone_count.label("clone_count"),
-        deployment_count.label("deployment_count"),
-        like_count.label("like_count"),
+        func.coalesce(clone_stats.c.clone_count, 0).label("clone_count"),
+        func.coalesce(clone_stats.c.deployment_count, 0).label("deployment_count"),
+        func.coalesce(like_stats.c.like_count, 0).label("like_count"),
     )
     result = await db.execute(enriched_stmt.order_by(CatalogAsset.created_at.desc()).offset(skip).limit(limit))
     items = [
@@ -311,7 +312,7 @@ async def get_asset(slug: str, db: AsyncSession = Depends(get_db), user=Depends(
     status_filter = [] if is_privileged else [CatalogAsset.status == AssetStatus.Published]
 
     result = await db.execute(
-        select(CatalogAsset, UserProfile.display_name)
+        select(CatalogAsset, UserProfile.display_name, UserProfile.email)
         .outerjoin(UserProfile, CatalogAsset.owner_id == UserProfile.id)
         .where(condition, *status_filter)
     )
@@ -320,7 +321,7 @@ async def get_asset(slug: str, db: AsyncSession = Depends(get_db), user=Depends(
     # Non-privileged users: also allow the asset owner to view their own unpublished asset
     if not row and not is_privileged:
         result2 = await db.execute(
-            select(CatalogAsset, UserProfile.display_name)
+            select(CatalogAsset, UserProfile.display_name, UserProfile.email)
             .outerjoin(UserProfile, CatalogAsset.owner_id == UserProfile.id)
             .where(condition, CatalogAsset.owner_id == user.id)
         )
@@ -328,7 +329,7 @@ async def get_asset(slug: str, db: AsyncSession = Depends(get_db), user=Depends(
 
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
-    asset, owner_display_name = row
+    asset, owner_display_name, owner_profile_email = row
     from app.db.models import CloneRequest, CloneStatus, AssetLike
     from sqlalchemy import func as _func
     clone_count_result = await db.execute(
@@ -351,7 +352,7 @@ async def get_asset(slug: str, db: AsyncSession = Depends(get_db), user=Depends(
         select(AssetLike).where(AssetLike.asset_id == asset.id, AssetLike.user_id == user.id)
     )
     liked_by_me = liked_result.scalars().first() is not None
-    return _to_response(asset, owner_name=owner_display_name, clone_request_count=clone_count, deployment_count=deployment_count, like_count=like_count, liked_by_me=liked_by_me)
+    return _to_response(asset, owner_name=owner_display_name, owner_email=owner_profile_email, clone_request_count=clone_count, deployment_count=deployment_count, like_count=like_count, liked_by_me=liked_by_me)
 
 
 @router.post("/catalog", response_model=CatalogAssetResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -385,6 +386,8 @@ async def create_catalog_asset(
         status=AssetStatus.AI_Review,
         owner_id=user.id,
     )
+    for field in ('owner_name','owner_email','manager_name','manager_email','designation','category','architecture_file_url','dependencies','commands','demo_url','collaborators'):
+        setattr(asset, field, getattr(body, field, None))
     db.add(asset)
     await db.flush()
     await db.refresh(asset)
@@ -402,7 +405,9 @@ async def create_catalog_asset(
         "submitter_email": user.email,
         "entity": "catalog_asset",
     }
-    background_tasks.add_task(run_scoring_pipeline, str(asset.id), submission_data, "catalog_asset")
+    from app.services.evaluation_jobs import enqueue_evaluation
+    await enqueue_evaluation(db, asset.id, "catalog_asset", user.id)
+    await db.commit()
     return _to_response(asset)
 
 
@@ -410,6 +415,7 @@ async def create_catalog_asset(
 async def update_catalog_asset(
     asset_id: str,
     body: CatalogAssetUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user=Depends(get_current_user),
 ) -> CatalogAssetResponse:
@@ -427,7 +433,12 @@ async def update_catalog_asset(
             detail="Only the asset owner or an admin can update this asset.",
         )
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    from app.schemas.metadata_rules import validate_patch_pair
+    validate_patch_pair(asset, changes)
+    if 'family' in changes:
+        await change_family(db, asset.id, changes.pop('family'), user.id, catalog=True)
+    for field, value in changes.items():
         setattr(asset, field, value)
 
     asset.updated_at = datetime.now(tz=timezone.utc)
@@ -438,12 +449,16 @@ async def update_catalog_asset(
         entity_type="catalog_asset",
         entity_id=asset.id,
     ))
+    await db.commit()
+    from app.services.knowledge.ingestion_service import reindex_catalog_asset_by_id
+    background_tasks.add_task(reindex_catalog_asset_by_id, str(asset.id))
     return _to_response(asset)
 
 
 @router.delete("/catalog/{asset_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_catalog_asset(
     asset_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user=require_role("Aimplify.Owner"),
 ) -> Response:
@@ -471,4 +486,16 @@ async def delete_catalog_asset(
         entity_id=asset.id,
     ))
     await db.commit()
+    from app.services.knowledge.ingestion_service import reindex_catalog_asset_by_id
+    background_tasks.add_task(reindex_catalog_asset_by_id, str(asset.id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/catalog/{asset_id}/family")
+async def update_asset_family(asset_id: uuid.UUID, body: FamilyUpdate, background_tasks: BackgroundTasks,
+                              db: AsyncSession = Depends(get_db), user=require_role("Aimplify.Admin", "Aimplify.Owner")):
+    asset = await change_family(db, asset_id, body.family, user.id, catalog=True)
+    await db.commit()
+    from app.services.knowledge.ingestion_service import reindex_catalog_asset_by_id
+    background_tasks.add_task(reindex_catalog_asset_by_id, str(asset.id))
+    return {"id":str(asset.id), "family":asset.family, "slug":asset.slug}

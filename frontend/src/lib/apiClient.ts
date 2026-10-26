@@ -14,7 +14,7 @@ export const apiClient: AxiosInstance = axios.create({
 // Attach JWT from memory on every request
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = authStore.getState().accessToken;
-  if (token) {
+  if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -27,7 +27,9 @@ apiClient.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config;
-    if (error.response?.status === 401 && !original._retry) {
+    // Login and refresh failures must reach their caller without refreshing again.
+    const isAuthExchange = /\/auth\/(login|refresh)(?:\?|$)/.test(original?.url ?? '');
+    if (error.response?.status === 401 && original && !original._retry && !isAuthExchange) {
       original._retry = true;
       if (!_refreshing) {
         _refreshing = authStore.getState().refresh().finally(() => { _refreshing = null; });

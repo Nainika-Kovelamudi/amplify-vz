@@ -1,4 +1,5 @@
 from __future__ import annotations
+from fastapi import BackgroundTasks
 
 import logging
 from collections import Counter, defaultdict
@@ -29,6 +30,7 @@ from app.schemas.admin import (
     ReportTrendPoint,
 )
 from app.schemas.submission import SubmissionListResponse, SubmissionResponse
+from app.services.blob_service import refresh_sas_url
 from app.services.notification_service import push_notification, push_notifications_to_roles
 
 logger = logging.getLogger(__name__)
@@ -47,8 +49,8 @@ def _sub_to_response(s: Submission) -> SubmissionResponse:
         cloud_provider=s.cloud_provider,
         maturity=s.maturity,
         demo_ready=s.demo_ready,
-        video_url=s.video_url,
-        video_urls=s.video_urls or ([s.video_url] if s.video_url else []),
+        video_url=refresh_sas_url(s.video_url),
+        video_urls=[refresh_sas_url(u) for u in dict.fromkeys(s.video_urls or ([s.video_url] if s.video_url else [])) if u],
         status=s.status.value if hasattr(s.status, "value") else s.status,
         ai_score=s.ai_score,
         ai_feedback=s.ai_feedback,
@@ -208,6 +210,7 @@ async def approve_submission(
 async def reject_submission(
     submission_id: str,
     body: ApprovalActionRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: UserProfile = Depends(get_current_user),
 ) -> SubmissionResponse:
@@ -233,12 +236,6 @@ async def reject_submission(
     ))
     submitter_result = await db.execute(select(UserProfile).where(UserProfile.id == sub.submitter_id))
     submitter = submitter_result.scalars().first()
-    if submitter:
-        try:
-            await send_rejection_email(submitter.email, sub.title, body.notes or "")
-        except Exception as exc:
-            logger.warning("Failed to send rejection email: %s", exc)
-
     await db.commit()
     await db.refresh(sub)
     await push_notification(
@@ -248,6 +245,8 @@ async def reject_submission(
         "submission_rejected", str(sub.id),
     )
     await db.commit()
+    if submitter:
+        background_tasks.add_task(send_rejection_email, submitter.email, sub.title, body.notes or "")
     return _sub_to_response(sub)
 
 
@@ -255,6 +254,7 @@ async def reject_submission(
 async def final_reject_submission(
     submission_id: str,
     body: ApprovalActionRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: UserProfile = Depends(get_current_user),
 ) -> SubmissionResponse:
@@ -282,20 +282,17 @@ async def final_reject_submission(
 
     submitter_result = await db.execute(select(UserProfile).where(UserProfile.id == sub.submitter_id))
     submitter = submitter_result.scalars().first()
-    if submitter:
-        try:
-            await send_final_rejection_email(submitter.email, sub.title, body.notes or "")
-        except Exception as exc:
-            logger.warning("Failed to send final rejection email: %s", exc)
-
     await db.commit()
     await db.refresh(sub)
+    if submitter:
+        background_tasks.add_task(send_final_rejection_email, submitter.email, sub.title, body.notes or "")
     return _sub_to_response(sub)
 
 
 @router.patch("/approvals/{submission_id}/hold", response_model=SubmissionResponse)
 async def hold_submission(
     submission_id: str,
+    background_tasks: BackgroundTasks,
     body: ApprovalActionRequest = ApprovalActionRequest(),
     db: AsyncSession = Depends(get_db),
     user: UserProfile = Depends(get_current_user),
@@ -325,14 +322,10 @@ async def hold_submission(
 
     submitter_result = await db.execute(select(UserProfile).where(UserProfile.id == sub.submitter_id))
     submitter = submitter_result.scalars().first()
-    if submitter:
-        try:
-            await send_on_hold_email(submitter.email, sub.title, body.notes or "")
-        except Exception as exc:
-            logger.warning("Failed to send on-hold email: %s", exc)
-
     await db.commit()
     await db.refresh(sub)
+    if submitter:
+        background_tasks.add_task(send_on_hold_email, submitter.email, sub.title, body.notes or "")
     return _sub_to_response(sub)
 
 
@@ -377,247 +370,10 @@ async def get_executive_report(
     days: int = Query(30, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
     user=require_role("Aimplify.Owner"),
+    refresh: bool = False,
 ) -> ExecutiveReportResponse:
-    """Owner-only executive view of submission, approval, publishing, and adoption KPIs."""
-    now = datetime.now(tz=timezone.utc)
-    period_start = now - timedelta(days=days)
-    portal_setting = (await db.execute(
-        select(PortalSetting).where(PortalSetting.key == "portal_content")
-    )).scalar_one_or_none()
-    configured_order = (portal_setting.value or {}).get("family_order", DEFAULT_FAMILY_ORDER) if portal_setting else DEFAULT_FAMILY_ORDER
-    family_order = [name for name in configured_order if name in DEFAULT_FAMILY_ORDER]
-    family_order.extend(name for name in DEFAULT_FAMILY_ORDER if name not in family_order)
-
-    period_submissions = list((await db.execute(
-        select(Submission).where(Submission.created_at >= period_start)
-    )).scalars().all())
-    all_submissions = list((await db.execute(select(Submission))).scalars().all())
-    assets = list((await db.execute(
-        select(CatalogAsset).where(CatalogAsset.status == AssetStatus.Published)
-    )).scalars().all())
-    logs = list((await db.execute(
-        select(ActivityLog).where(ActivityLog.created_at >= period_start)
-    )).scalars().all())
-
-    action_counts = Counter(log.action for log in logs)
-    scored = [s for s in period_submissions if s.ai_score is not None]
-    non_error_scores = [float(s.ai_score) for s in scored if s.ai_score and s.ai_score > 0]
-    ai_passed = sum(1 for s in scored if s.ai_score is not None and s.ai_score >= 60)
-    ai_failures = sum(1 for s in scored if s.ai_score == 0)
-    ai_needs_changes = sum(1 for s in scored if s.ai_score is not None and 0 < s.ai_score < 60)
-    approved = action_counts.get("submission_approved", 0)
-    published = action_counts.get("submission_published", 0) + action_counts.get("asset_published", 0)
-    rejected = action_counts.get("submission_final_rejected", 0)
-    decisions = approved + rejected + action_counts.get("submission_rejected", 0)
-
-    review_hours = [
-        max(0.0, (s.reviewed_at - s.created_at).total_seconds() / 3600)
-        for s in period_submissions
-        if s.reviewed_at is not None
-    ]
-    pending = [s for s in all_submissions if s.status == SubmissionStatus.Manual_Approval]
-    oldest_pending_hours = max(
-        (max(0.0, (now - s.created_at).total_seconds() / 3600) for s in pending),
-        default=0.0,
-    )
-    submission_count = len(period_submissions)
-
-    status_funnel = Counter(
-        s.status.value if hasattr(s.status, "value") else str(s.status)
-        for s in all_submissions
-    )
-
-    daily: dict[str, dict[str, int]] = {
-        (period_start.date() + timedelta(days=i)).isoformat(): {
-            "submitted": 0, "approved": 0, "published": 0, "needs_changes": 0,
-        }
-        for i in range((now.date() - period_start.date()).days + 1)
-    }
-    for sub in period_submissions:
-        key = sub.created_at.date().isoformat()
-        if key in daily:
-            daily[key]["submitted"] += 1
-            if sub.ai_score is not None and 0 < sub.ai_score < 60:
-                daily[key]["needs_changes"] += 1
-    for log in logs:
-        key = log.created_at.date().isoformat()
-        if key not in daily:
-            continue
-        if log.action == "submission_approved":
-            daily[key]["approved"] += 1
-        elif log.action in ("submission_published", "asset_published"):
-            daily[key]["published"] += 1
-
-    def build_breakdown(field: str) -> list[ReportBreakdown]:
-        groups: dict[str, list[Submission]] = defaultdict(list)
-        for sub in period_submissions:
-            groups[(getattr(sub, field, None) or "Unspecified")].append(sub)
-        rows: list[ReportBreakdown] = []
-        for name, submissions in groups.items():
-            scores = [float(s.ai_score) for s in submissions if s.ai_score and s.ai_score > 0]
-            rows.append(ReportBreakdown(
-                name=name,
-                submitted=len(submissions),
-                approved=sum(1 for s in submissions if s.status in (SubmissionStatus.Approved, SubmissionStatus.Published)),
-                published=sum(1 for s in submissions if s.status == SubmissionStatus.Published),
-                average_ai_score=round(sum(scores) / len(scores), 1) if scores else 0.0,
-            ))
-        if field == "family":
-            # Keep executive reporting aligned with the FAST taxonomy. Legacy
-            # records are intentionally omitted until the data owners realign them.
-            by_name = {row.name: row for row in rows}
-            return [
-                by_name.get(name, ReportBreakdown(name=name, submitted=0, approved=0, published=0, average_ai_score=0.0))
-                for name in family_order
-            ]
-        return sorted(rows, key=lambda row: row.submitted, reverse=True)
-
-    clone_requests = (await db.execute(
-        select(func.count()).select_from(CloneRequest).where(CloneRequest.created_at >= period_start)
-    )).scalar_one()
-    demo_requests = (await db.execute(
-        select(func.count()).select_from(DemoRequest).where(DemoRequest.requested_at >= period_start)
-    )).scalar_one()
-    active_users = (await db.execute(
-        select(func.count()).select_from(UserProfile).where(UserProfile.last_login >= period_start)
-    )).scalar_one()
-
-    l1_waiting = sum(1 for s in all_submissions if s.status == SubmissionStatus.Manual_Approval)
-    l2_waiting = sum(1 for s in all_submissions if s.status == SubmissionStatus.Approved)
-    published_assets = len(assets)
-
-    family_counts = Counter((asset.family or "Unspecified") for asset in assets)
-    family_assets = [
-        ExecutiveFamilyMetric(
-            name=name,
-            asset_count=family_counts.get(name, 0),
-            percentage=round(family_counts.get(name, 0) * 100 / published_assets, 1) if published_assets else 0.0,
-        )
-        for name in family_order
-    ]
-
-    event_definitions = [
-        ("asset_viewed", "Asset viewed", ("asset_viewed",)),
-        ("user_login", "User login", ("user_login", "user_login_dev")),
-        ("assets_revised", "Assets revised", ("submission_revised", "catalog_asset_updated")),
-        ("new_submission", "New submission", ("submission_created",)),
-        ("published_asset", "Assets published", ("submission_published", "asset_published")),
-    ]
-    top_events = [
-        ExecutiveEventMetric(key=key, label=label, count=sum(action_counts.get(action, 0) for action in actions))
-        for key, label, actions in event_definitions
-    ]
-
-    clone_by_asset = dict((await db.execute(
-        select(CloneRequest.asset_id, func.count(CloneRequest.id))
-        .where(CloneRequest.created_at >= period_start)
-        .group_by(CloneRequest.asset_id)
-    )).all())
-    demo_by_asset = dict((await db.execute(
-        select(DemoRequest.asset_id, func.count(DemoRequest.id))
-        .where(DemoRequest.requested_at >= period_start)
-        .group_by(DemoRequest.asset_id)
-    )).all())
-    ranked_assets = sorted(
-        assets,
-        key=lambda asset: (
-            (asset.view_count or 0)
-            + (asset.artifact_download_count or 0) * 2
-            + clone_by_asset.get(asset.id, 0) * 4
-            + demo_by_asset.get(asset.id, 0) * 4
-        ),
-        reverse=True,
-    )[:5]
-    trending_assets = [
-        ExecutiveTrendingAsset(
-            id=str(asset.id), slug=asset.slug, title=asset.title, family=asset.family,
-            views=asset.view_count or 0,
-            downloads=asset.artifact_download_count or 0,
-            clone_requests=clone_by_asset.get(asset.id, 0),
-            demo_requests=demo_by_asset.get(asset.id, 0),
-            engagement_score=(asset.view_count or 0) + (asset.artifact_download_count or 0) * 2
-            + clone_by_asset.get(asset.id, 0) * 4 + demo_by_asset.get(asset.id, 0) * 4,
-        )
-        for asset in ranked_assets
-    ]
-
-    user_event_counts = Counter(log.actor_id for log in logs if log.actor_id is not None)
-    user_last_active: dict = {}
-    for log in logs:
-        if log.actor_id is not None and (
-            log.actor_id not in user_last_active or log.created_at > user_last_active[log.actor_id]
-        ):
-            user_last_active[log.actor_id] = log.created_at
-    top_user_ids = [user_id for user_id, _ in user_event_counts.most_common(5)]
-    top_user_profiles = list((await db.execute(
-        select(UserProfile).where(UserProfile.id.in_(top_user_ids))
-    )).scalars().all()) if top_user_ids else []
-    profiles_by_id = {profile.id: profile for profile in top_user_profiles}
-    most_active_users = [
-        ExecutiveActiveUser(
-            user_id=str(user_id),
-            name=profiles_by_id[user_id].display_name or profiles_by_id[user_id].email,
-            email=profiles_by_id[user_id].email,
-            events=count,
-            last_active=user_last_active[user_id],
-        )
-        for user_id, count in user_event_counts.most_common(5)
-        if user_id in profiles_by_id
-    ]
-
-    return ExecutiveReportResponse(
-        generated_at=now,
-        period_start=period_start,
-        period_end=now,
-        days=days,
-        summary=ExecutiveSummary(
-            # Total = published catalog assets + submissions not yet published.
-            # Submissions with Published status are already counted as published assets,
-            # so excluding them avoids double-counting.
-            total_assets=published_assets + sum(
-                1 for s in all_submissions if s.status != SubmissionStatus.Published
-            ),
-            published_assets=published_assets,
-            awaiting_review=l1_waiting + l2_waiting,
-            l1_waiting_approval=l1_waiting,
-            l2_waiting_approval=l2_waiting,
-            new_submissions=submission_count,
-            ai_passed=ai_passed,
-            ai_needs_changes=ai_needs_changes,
-            ai_failures=ai_failures,
-            approved=approved,
-            published=published,
-            rejected=rejected,
-            pending_approvals=len(pending),
-            awaiting_publish=sum(1 for s in all_submissions if s.status == SubmissionStatus.Approved),
-            on_hold=sum(1 for s in all_submissions if s.status == SubmissionStatus.On_Hold),
-            average_ai_score=round(sum(non_error_scores) / len(non_error_scores), 1) if non_error_scores else 0.0,
-            ai_pass_rate=round(ai_passed * 100 / len(scored), 1) if scored else 0.0,
-            approval_rate=round(approved * 100 / decisions, 1) if decisions else 0.0,
-            publication_rate=round(published * 100 / approved, 1) if approved else 0.0,
-            average_review_hours=round(sum(review_hours) / len(review_hours), 1) if review_hours else 0.0,
-            oldest_pending_hours=round(oldest_pending_hours, 1),
-        ),
-        status_funnel=dict(status_funnel),
-        daily_trend=[
-            ReportTrendPoint(date=datetime.fromisoformat(key).date(), **values)
-            for key, values in sorted(daily.items())
-        ],
-        departments=build_breakdown("department"),
-        families=build_breakdown("family"),
-        engagement=ExecutiveEngagement(
-            catalog_views=sum(a.view_count or 0 for a in assets),
-            artifact_downloads=sum(a.artifact_download_count or 0 for a in assets),
-            demo_views=sum(a.demo_view_count or 0 for a in assets),
-            clone_requests=clone_requests,
-            demo_requests=demo_requests,
-            active_users=active_users,
-        ),
-        family_assets=family_assets,
-        top_events=top_events,
-        trending_assets=trending_assets,
-        active_users=most_active_users,
-    )
+    from app.services.executive_report_data import build_executive_report
+    return await build_executive_report(days, db, user, refresh)
 
 
 @router.get("/executive-report/download")
@@ -640,7 +396,8 @@ async def download_executive_report(
         "pdf": (build_executive_report_pdf, "application/pdf"),
     }
     builder, media_type = builders[format]
-    content = builder(report)
+    from starlette.concurrency import run_in_threadpool
+    content = await run_in_threadpool(builder, report)
     filename = f"AIMPLIFY_Executive_Report_{report.period_end:%Y%m%d}.{format}"
     return StreamingResponse(
         BytesIO(content),

@@ -1,0 +1,22 @@
+    # Aimplify Knowledge Bot — reuses the shared AIV vector DB (same Mongo cluster as
+    # AIV_MONGODB_URL). Working assumptions are ASSUMED-unconfirmed — see
+    # docs/knowledge-bot-plan.md §7a. Kept as separate settings (not hardcoded) so
+    # correcting the collection name or swapping to a distinct credential later is a
+    # config change, not a code change.
+    chatbot_enabled: bool = Field(True, description="Show the chatbot and accept chat requests")
+    aimplify_knowledge_collection: str = Field(
+        "aimplify_knowledge", description="Dedicated collection/index for the Aimplify knowledge bot within the shared AIV vector DB"
+    )
+    aimplify_vector_index_name: str = Field(
+        "aimplify_knowledge_vector_index", description="Atlas Vector Search index name on the aimplify_knowledge collection"
+    )
+    aimplify_search_index_name: str = Field(
+        "aimplify_knowledge_search_index", description="Atlas Search (full-text) index name on the aimplify_knowledge collection"
+    )
+    gemini_embedding_model: str = Field(
+        "gemini-embedding-001", description="Gemini embedding model used to index and query the Aimplify knowledge base"
+    )
+    gemini_embedding_dimensions: int = Field(
+        768, description="Output dimensionality requested from the Gemini embedding model — must match the Atlas Vector Search index's numDimensions"
+    )
+

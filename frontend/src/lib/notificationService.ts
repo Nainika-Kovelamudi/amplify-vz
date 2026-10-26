@@ -1,5 +1,7 @@
 import { apiClient } from './apiClient';
 import { authStore } from '../store/authStore';
+import { getAllDemoRequests, getMyDemoRequests } from './demoRequestService';
+import { getMyCloneRequests } from './cloneService';
 
 export interface Notification {
   id: string;
@@ -27,6 +29,35 @@ export async function markNotificationsRead(notificationIds?: string[]): Promise
     : { mark_all: true };
   const { data } = await apiClient.patch<{ updated: number }>('/notifications/read', body);
   return data;
+}
+
+export async function notificationDetailPath(notification: Notification): Promise<string> {
+  if (notification.event_type === 'platform_feedback_created') return '/pipeline?tab=platform-feedback';
+  const id = notification.entity_id;
+  if (!id) return '/pipeline';
+
+  if (notification.event_type.startsWith('submission_')) {
+    const path = `/pipeline/${encodeURIComponent(id)}`;
+    if (notification.event_type !== 'submission_comment_added') return path;
+    const internal = notification.title.toLowerCase().includes('internal comment');
+    return `${path}?tab=comments${internal ? '&channel=internal' : ''}`;
+  }
+
+  if (notification.event_type.startsWith('demo_request_')) {
+    const requests = notification.event_type === 'demo_request_created'
+      ? await getAllDemoRequests()
+      : await getMyDemoRequests();
+    const request = requests.find((item) => item.id === id);
+    return request?.asset_id ? `/catalog/${encodeURIComponent(request.asset_id)}` : '/pipeline';
+  }
+
+  if (notification.event_type.startsWith('clone_')) {
+    const requests = await getMyCloneRequests();
+    const request = requests.find((item) => item.id === id);
+    return request?.asset_id ? `/catalog/${encodeURIComponent(request.asset_id)}` : '/pipeline';
+  }
+
+  return '/pipeline';
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────

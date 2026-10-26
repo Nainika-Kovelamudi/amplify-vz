@@ -1,3 +1,4 @@
+import { PlatformOperations } from '../components/admin/PlatformOperations';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -53,6 +54,7 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
 import { defaultFamilyBadge, useFamilies } from '../context/FamiliesContext';
 import { usePortalSettings } from '../context/PortalSettingsContext';
 import { Button } from '../components/ui/Button';
+import { PlatformFeedbackList } from '../components/demo/PlatformFeedbackList';
 import {
   getMySubmissions, getAllSubmissions, publishSubmission, deleteSubmission,
   type Submission,
@@ -597,19 +599,21 @@ function SubmissionCard({
 
 // ── Pipeline Page ─────────────────────────────────────────────────────────────
 
-type GroupTab = 'my-work' | 'review' | 'all-activity';
+type GroupTab = 'my-work' | 'review' | 'all-activity' | 'platform-feedback' | 'operations';
+// Hidden by default; enable explicitly when building the frontend.
+const ASSET_OPERATIONS_ENABLED = import.meta.env.VITE_ASSET_OPERATIONS_ENABLED?.trim().toLowerCase() === 'true';
 
 function latestLogicalSubmissions(submissions: Submission[]): Submission[] {
   const latestByAsset = new Map<string, Submission>();
   for (const submission of submissions) {
     const logicalKey = submission.catalog_asset_id || submission.id;
     const existing = latestByAsset.get(logicalKey);
-    const submissionTime = new Date(submission.updated_at || submission.created_at).getTime();
-    const existingTime = existing ? new Date(existing.updated_at || existing.created_at).getTime() : -1;
+    const submissionTime = new Date(submission.created_at).getTime();
+    const existingTime = existing ? new Date(existing.created_at).getTime() : -1;
     if (!existing || submissionTime > existingTime) latestByAsset.set(logicalKey, submission);
   }
   return [...latestByAsset.values()].sort((a, b) =>
-    new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
 export function Pipeline() {
@@ -634,12 +638,19 @@ export function Pipeline() {
   const [allDemoRequests, setAllDemoRequests] = useState<DemoRequest[]>([]);
   const [activeTab, setActiveTab] = useState<GroupTab>(() => {
     const t = searchParams.get('tab');
-    if (t === 'review' || t === 'all-activity') return t as GroupTab;
+    if (t === 'review' || t === 'all-activity' || t === 'platform-feedback') return t as GroupTab;
+    if (t === 'operations' && ASSET_OPERATIONS_ENABLED) return 'operations';
     return 'my-work';
   });
   const [mySubFilter, setMySubFilter] = useState<string>('All');
+  useEffect(() => {
+    if (searchParams.get('tab') === 'platform-feedback') setActiveTab('platform-feedback');
+    if (searchParams.get('tab') === 'operations') setActiveTab(ASSET_OPERATIONS_ENABLED ? 'operations' : 'my-work');
+  }, [searchParams]);
   const [allSubFilter, setAllSubFilter] = useState<string>('All');
-  const [myWorkSubTab, setMyWorkSubTab] = useState<'submissions' | 'clones' | 'incoming-clones' | 'demo-requests'>('submissions');
+  const [myWorkSubTab, setMyWorkSubTab] = useState<'submissions' | 'clones' | 'incoming-clones' | 'demo-requests' | 'incoming-demos'>('submissions');
+  const [incomingDemoLoading, setIncomingDemoLoading] = useState(true);
+  const [incomingDemoFailed, setIncomingDemoFailed] = useState(false);
   const [reviewSubTab, setReviewSubTab] = useState<'submissions' | 'my-reviews' | 'clones' | 'demo-requests'>('submissions');
   const [allSubTab, setAllSubTab] = useState<'submissions' | 'clones' | 'demo-requests'>(isOwner ? 'submissions' : 'clones');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -700,7 +711,10 @@ export function Pipeline() {
   }, []);
 
   const loadAllDemoRequests = useCallback(async () => {
-    try { setAllDemoRequests(await getAllDemoRequests()); } catch { /* ignore */ }
+    setIncomingDemoLoading(true); setIncomingDemoFailed(false);
+    try { setAllDemoRequests(await getAllDemoRequests()); }
+    catch { setIncomingDemoFailed(true); }
+    finally { setIncomingDemoLoading(false); }
   }, []);
 
   const loadAllCloneRequests = useCallback(async () => {
@@ -732,9 +746,10 @@ export function Pipeline() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [mySubmissions, loadMine, loadAll, isOwner]);
 
+  const logicalMySubmissions = useMemo(() => latestLogicalSubmissions(mySubmissions), [mySubmissions]);
   const filteredMySubmissions = useMemo(() =>
-    mySubFilter === 'All' ? mySubmissions : mySubmissions.filter(s => s.status === mySubFilter),
-    [mySubFilter, mySubmissions]);
+    mySubFilter === 'All' ? logicalMySubmissions : logicalMySubmissions.filter(s => s.status === mySubFilter),
+    [mySubFilter, logicalMySubmissions]);
 
   const logicalAllSubmissions = useMemo(() => latestLogicalSubmissions(allSubmissions), [allSubmissions]);
 
@@ -868,7 +883,7 @@ export function Pipeline() {
   const downloadMyWork = () => {
     const date = new Date().toISOString().slice(0, 10);
     if (myWorkSubTab === 'submissions') {
-      exportCsv(`aimplify-my-assets-${date}.csv`, assetExportColumns, mySubmissions as unknown as Record<string, unknown>[]);
+      exportCsv(`aimplify-my-assets-${date}.csv`, assetExportColumns, logicalMySubmissions as unknown as Record<string, unknown>[]);
     } else if (myWorkSubTab === 'clones') {
       exportCsv(`aimplify-my-repo-access-requests-${date}.csv`, cloneExportColumns, myCloneRequests as unknown as Record<string, unknown>[]);
     } else if (myWorkSubTab === 'demo-requests') {
@@ -1052,7 +1067,9 @@ export function Pipeline() {
     { id: 'my-work',      label: 'My Work',       icon: User,          count: myWorkCount,      show: true },
     { id: 'review',       label: 'Review Queue',  icon: ClipboardList, count: reviewCount,      show: isAdmin || isOwner || allDemoRequests.length > 0 || assignedReviewQueue.length > 0 },
     { id: 'all-activity', label: 'All Activity',  icon: LayoutGrid,    count: allActivityCount, show: isAdmin || isOwner },
-  ].filter(t => t.show);
+    { id: 'platform-feedback', label: 'Platform Feedback', icon: MessageSquare, count: 0, show: isAdmin || isOwner },
+    { id: 'operations', label: isAdmin || isOwner ? 'Asset Operations' : 'My Remediations', icon: ClipboardList, count: 0, show: ASSET_OPERATIONS_ENABLED },
+  ].filter(t => t.show) as { id: GroupTab; label: string; icon: React.ElementType; count: number; show: boolean }[];
 
   const statusOptions = ['All', ...Object.keys(STATUS_CONFIG)];
 
@@ -1163,7 +1180,7 @@ export function Pipeline() {
       {/* ── Group Tabs ──────────────────────────────────────────────────── */}
       {GROUP_TABS.length > 1 && (
         <div className="mx-auto w-full max-w-5xl px-4">
-          <div className="flex w-full gap-1 border-b border-gray-200">
+          <div className="flex w-full flex-wrap gap-1 border-b border-gray-200">
             {GROUP_TABS.map(({ id, label, icon: Icon, count }) => {
               const active = activeTab === id;
               return (
@@ -1176,9 +1193,9 @@ export function Pipeline() {
                 >
                   <Icon className="h-4 w-4" />
                   {label}
-                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                  {id !== 'platform-feedback' && id !== 'operations' && <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
                     active ? 'bg-sky-100 text-sky-700' : 'bg-gray-100 text-gray-500'
-                  }`}>{count}</span>
+                  }`}>{count}</span>}
                   {active && (
                     <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t-full bg-sky-500" />
                   )}
@@ -1200,15 +1217,18 @@ export function Pipeline() {
 
       {/* ── Tab Content ─────────────────────────────────────────────────── */}
       <div className="mx-auto w-full max-w-5xl px-4 pt-6">
+        {ASSET_OPERATIONS_ENABLED && activeTab === 'operations' && <PlatformOperations />}
+        {activeTab === 'platform-feedback' && (isAdmin || isOwner) && <PlatformFeedbackList />}
 
         {/* ── MY WORK ────────────────────────────────────────────────── */}
         {activeTab === 'my-work' && (
           <div>
             <SubTabs
               tabs={[
-                { id: 'submissions', label: 'My Submissions',         count: mySubmissions.length },
+                { id: 'submissions', label: 'My Submissions',         count: logicalMySubmissions.length },
                 { id: 'clones',      label: 'My Repo Access Requests', count: myCloneRequests.length },
                 { id: 'demo-requests', label: 'My Demo Requests', count: myDemoRequests.length },
+                ...(!isAdmin && !isOwner ? [{ id: 'incoming-demos', label: 'Requests for My Assets', count: allDemoRequests.length, urgent: pendingDemoCount > 0 }] : []),
                 ...(incomingForMyWork.length > 0
                   ? [{ id: 'incoming-clones', label: 'Incoming Clone Requests', count: incomingForMyWork.length, urgent: incomingForMyWork.some(r => r.status === 'Pending') }]
                   : []),
@@ -1217,18 +1237,30 @@ export function Pipeline() {
               onChange={(t) => { setMyWorkSubTab(t as typeof myWorkSubTab); setMySubFilter('All'); }}
             />
             <div className="mt-6">
+              {myWorkSubTab === 'incoming-demos' && !isAdmin && !isOwner && (
+                <Section title="Demo Requests for My Assets" count={allDemoRequests.length}
+                  action={<Button variant="outline" disabled={incomingDemoLoading} onClick={() => void loadAllDemoRequests()}>Refresh</Button>}>
+                  {incomingDemoLoading ? <p role="status" className="py-6 text-sm text-gray-500">Loading requests…</p>
+                    : incomingDemoFailed ? <Button variant="outline" onClick={() => void loadAllDemoRequests()}>Retry</Button>
+                    : allDemoRequests.length === 0 ? <EmptyState message="No demo requests for assets you own yet." />
+                    : <div className="space-y-3">{allDemoRequests.map(request => (
+                      <DemoRequestCard key={request.id} request={request} showRequester actionLoading={actionLoading}
+                        onApprove={handleDemoApprove} onReject={handleDemoReject} />
+                    ))}</div>}
+                </Section>
+              )}
               {myWorkSubTab === 'submissions' && (
                 <Section
                   title="My Submissions"
                   count={filteredMySubmissions.length}
-                  total={mySubmissions.length}
+                  total={logicalMySubmissions.length}
                   statusFilter={mySubFilter}
                   onStatusChange={setMySubFilter}
                   statusOptions={statusOptions}
                   action={<Button variant="outline" onClick={downloadMyWork}><Download className="mr-2 h-4 w-4" />Download</Button>}
                 >
                   {filteredMySubmissions.length === 0 ? (
-                    <EmptyState message={mySubmissions.length === 0 ? 'No submissions yet.' : 'No submissions match this filter.'} />
+                    <EmptyState message={logicalMySubmissions.length === 0 ? 'No submissions yet.' : 'No submissions match this filter.'} />
                   ) : filteredMySubmissions.map((sub, i) => (
                     <SubmissionCard key={sub.id} sub={sub} index={i} role={role} userId={user?.id}
                       showSubmitter={false}
@@ -1454,7 +1486,7 @@ interface SubTabDef { id: string; label: string; count: number; urgent?: boolean
 
 function SubTabs({ tabs, active, onChange }: { tabs: SubTabDef[]; active: string; onChange: (id: string) => void }) {
   return (
-    <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
+    <div className="flex flex-wrap gap-1 rounded-xl bg-gray-100 p-1">
       {tabs.map(({ id, label, count, urgent }) => {
         const isActive = active === id;
         return (
@@ -1667,6 +1699,7 @@ function DemoRequestCard({ request, showRequester, actionLoading, onApprove, onR
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-gray-900 truncate">{request.asset_title ?? request.asset_id}</p>
+          {request.batch_id && <p className="mt-1 text-xs font-medium text-sky-700" title={request.batch_id}>Multi-asset request: {request.batch_id.slice(0, 8)}</p>}
           <div className="mt-1.5 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600">
             <span><span className="font-medium text-gray-400">Customer</span> {request.customer_name}</span>
             <span><span className="font-medium text-gray-400">Project</span> {request.project_name}</span>

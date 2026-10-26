@@ -1,3 +1,6 @@
+import { FamilyEditor } from '../components/admin/FamilyEditor';
+import { evaluationWeights } from '../lib/evaluationDisplay';
+import { ScoreCapDetails } from '../components/admin/ScoreCapDetails';
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -15,7 +18,9 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { DemoVideoModal } from '../components/media/DemoVideoModal';
 import { getSubmission, deleteSubmission, publishSubmission, retrySubmissionAIScore, type Submission } from '../lib/submissionService';
 import { approveSubmission, rejectSubmission, finalRejectSubmission, holdSubmission, assignSubmissionReview } from '../lib/adminService';
-import { getComments, addComment, type SubmissionComment } from '../lib/commentService';
+import { getComments, addComment, type CommentChannel, type SubmissionComment } from '../lib/commentService';
+import { VoiceInputButton } from '../components/comments/VoiceInputButton';
+import { downloadHtmlCollateral, isAmplifyBlobUrl } from '../lib/mediaService';
 
 // ── types ──────────────────────────────────────────────────────────────────────
 type CheckStatus = 'pass' | 'warn' | 'fail';
@@ -44,6 +49,8 @@ const AGENT_CONFIG: Record<string, { label: string; weight: number; icon: string
   description:     { label: 'Description',     weight: 15, icon: '📝', desc: 'Clarity, completeness, discoverability for engineers' },
   demo_readiness:  { label: 'Demo Readiness',  weight: 20, icon: '🎬', desc: 'Client-presentable, demo video present, maturity level, setup complexity' },
   duplicate_check: { label: 'Duplicate Check', weight: 10, icon: '🔍', desc: 'Novelty vs existing catalog — penalises near-duplicates' },
+  document_validation: { label: 'Document Validation', icon: '📄', weight: 13, desc: 'Supporting documents, relevance and completeness' },
+  video_validation: { label: 'Video Validation', icon: '📹', weight: 12, desc: 'Demo video availability and relevance' },
 };
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -218,8 +225,12 @@ export function PipelineDetail() {
   const [rejectionNotes,    setRejectionNotes]    = useState('');
   const [actionLoading,     setActionLoading]     = useState<'approve' | 'reject' | 'final-reject' | 'hold' | 'publish' | 'rescore' | null>(null);
   const [actionError,       setActionError]       = useState('');
+  const [evaluationNotice, setEvaluationNotice] = useState('');
+  const [familySaving, setFamilySaving] = useState(false);
+  const [artifactError,     setArtifactError]     = useState('');
   const [decisionBanner,    setDecisionBanner]    = useState<{ type: 'approved' | 'rejected' | 'final-rejected' | 'on-hold' | 'published'; title: string } | null>(null);
   const [comments,          setComments]          = useState<SubmissionComment[]>([]);
+  const [commentChannel,    setCommentChannel]    = useState<CommentChannel>(() => new URLSearchParams(location.search).get('channel') === 'internal' ? 'internal' : 'submitter');
   const [commentDraft,      setCommentDraft]      = useState('');
   const [commentSending,    setCommentSending]    = useState(false);
   const [assigningReview,   setAssigningReview]   = useState(false);
@@ -227,6 +238,7 @@ export function PipelineDetail() {
   const role    = user?.role ?? 'guest';
   const isOwner = role === 'Aimplify.Owner';
   const isAdmin = role === 'Aimplify.Admin' || role === 'Aimplify.Owner';
+  const visibleCommentChannel: CommentChannel = isAdmin ? commentChannel : 'submitter';
   const pollingStatus = submission?.status;
   const pollingScore = submission?.ai_score;
 
@@ -275,14 +287,17 @@ export function PipelineDetail() {
   // Load comments when the comments tab is activated
   useEffect(() => {
     if (activeTab !== 'comments' || !id) return;
-    getComments(id).then(setComments).catch(() => {});
-  }, [activeTab, id]);
+    let cancelled = false;
+    setComments([]);
+    getComments(id, visibleCommentChannel).then(rows => { if (!cancelled) setComments(rows); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeTab, id, visibleCommentChannel]);
 
   const handleSendComment = async () => {
     if (!commentDraft.trim() || !id) return;
     setCommentSending(true);
     try {
-      const c = await addComment(id, commentDraft.trim());
+      const c = await addComment(id, commentDraft.trim(), visibleCommentChannel);
       setComments(prev => [...prev, c]);
       setCommentDraft('');
     } catch { /* ignore */ }
@@ -327,6 +342,7 @@ export function PipelineDetail() {
   const aiSummary     = aiFeedback?.summary        as string | undefined;
   const hasAI         = submission.ai_score !== null && submission.ai_score !== undefined;
   const aiScore       = hasAI ? Math.round(submission.ai_score as number) : null;
+  const recoverableAI = !hasAI || Boolean(aiFeedback?.error) || !agentScores || ['relevance','tech_quality','description','demo_readiness','duplicate_check','document_validation','video_validation'].some(k => typeof agentScores[k] !== 'number');
 
   const checklist: CheckItem[] = llmChecklist
     ? Object.entries(llmChecklist).map(([k, v]) => ({
@@ -337,7 +353,7 @@ export function PipelineDetail() {
     : buildChecklist(submission);
 
   const weightedContributions = agentScores
-    ? Object.fromEntries(Object.entries(agentScores).map(([k, v]) => [k, ((AGENT_CONFIG[k]?.weight ?? 0) * v) / 100]))
+    ? Object.fromEntries(Object.entries(agentScores).map(([k, v]) => [k, ((evaluationWeights(aiFeedback)[k] ?? 0) * v) / 100]))
     : {};
 
   const videoUrls    = [...new Set(submission.video_urls ?? [])];
@@ -361,9 +377,10 @@ export function PipelineDetail() {
       const notes = rejectionNotes.trim();
       const updated = await approveSubmission(id, notes || undefined);
       setSubmission(s => s ? { ...s, status: updated.status } : s);
+      void getSubmission(id).then(setSubmission).catch(() => {});
       setDecisionBanner({ type: 'approved', title: submission.title });
       // Post approval as a comment so all admins/owners can see it
-      try { const c = await addComment(id, `✅ Approved (L1) — moved to Owner publish queue.${notes ? `\n${notes}` : ''}`); setComments(prev => [...prev, c]); } catch {}
+      try { const c = await addComment(id, `✅ Approved (L1) — moved to Owner publish queue.${notes ? `\n${notes}` : ''}`); if (visibleCommentChannel === 'submitter') setComments(prev => [...prev, c]); } catch {}
       setRejectionNotes('');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Approve failed.');
@@ -379,7 +396,7 @@ export function PipelineDetail() {
       setSubmission(s => s ? { ...s, status: updated.status, admin_notes: rejectionNotes } : s);
       setDecisionBanner({ type: 'rejected', title: submission.title });
       // Post decision note as a comment so all admins/owners can see it
-      try { const c = await addComment(id, `↩ Returned for changes:\n${rejectionNotes}`); setComments(prev => [...prev, c]); } catch {}
+      try { const c = await addComment(id, `↩ Returned for changes:\n${rejectionNotes}`); if (visibleCommentChannel === 'submitter') setComments(prev => [...prev, c]); } catch {}
       setRejectionNotes('');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Reject failed.');
@@ -395,7 +412,7 @@ export function PipelineDetail() {
       setSubmission(s => s ? { ...s, status: updated.status, admin_notes: rejectionNotes } : s);
       setDecisionBanner({ type: 'final-rejected', title: submission.title });
       // Post decision note as a comment so all admins/owners can see it
-      try { const c = await addComment(id, `❌ Final rejection:\n${rejectionNotes}`); setComments(prev => [...prev, c]); } catch {}
+      try { const c = await addComment(id, `❌ Final rejection:\n${rejectionNotes}`); if (visibleCommentChannel === 'submitter') setComments(prev => [...prev, c]); } catch {}
       setRejectionNotes('');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Final reject failed.');
@@ -412,7 +429,7 @@ export function PipelineDetail() {
       setDecisionBanner({ type: 'on-hold', title: submission.title });
       // Post hold note as a comment so all admins/owners can see it
       if (notes) {
-        try { const c = await addComment(id, `⏸ Placed on hold:\n${notes}`); setComments(prev => [...prev, c]); } catch {}
+        try { const c = await addComment(id, `⏸ Placed on hold:\n${notes}`); if (visibleCommentChannel === 'submitter') setComments(prev => [...prev, c]); } catch {}
       }
       setRejectionNotes('');
     } catch (err) {
@@ -426,9 +443,10 @@ export function PipelineDetail() {
     try {
       const updated = await publishSubmission(id);
       setSubmission(s => s ? { ...s, status: updated.status } : s);
+      void getSubmission(id).then(setSubmission).catch(() => {});
       setDecisionBanner({ type: 'published', title: submission.title });
       if (rejectionNotes.trim()) {
-        try { const c = await addComment(id, `🚀 Published to catalog:\n${rejectionNotes.trim()}`); setComments(prev => [...prev, c]); } catch {}
+        try { const c = await addComment(id, `🚀 Published to catalog:\n${rejectionNotes.trim()}`); if (visibleCommentChannel === 'submitter') setComments(prev => [...prev, c]); } catch {}
       }
       setRejectionNotes('');
     } catch (err) {
@@ -437,11 +455,12 @@ export function PipelineDetail() {
   };
 
   const handleAIScoreRetry = async () => {
-    if (!id || !submission || submission.ai_score !== 0 || !isAdmin) return;
-    setActionLoading('rescore'); setActionError('');
+    if (!id || !submission || !(isAdmin || isOwner) || !recoverableAI) return;
+    setActionLoading('rescore'); setActionError(''); setEvaluationNotice('');
     try {
       const updated = await retrySubmissionAIScore(id);
       setSubmission(updated);
+      setEvaluationNotice('AI evaluation queued. Refresh to check completion.');
       setActiveTab('ai');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'AI score retry failed.');
@@ -626,11 +645,12 @@ export function PipelineDetail() {
                     .replace(/^[0-9a-f]{32}_/i, '');
                 }
 
-                function renderDocSlot(url: string, label: string) {
+                function renderDocSlot(url: string, label: string, fileName?: string) {
                   const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
                   const isImg = IMAGE_EXTS.has(ext);
+                  const isHtml = ext === 'html' || ext === 'htm';
                   const icon = isImg ? '🖼️' : (docIcon[ext] ?? '📎');
-                  const name = friendlyName(url);
+                  const name = fileName || friendlyName(url);
                   return (
                     <div key={label} className="flex items-center gap-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
                       <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-xl shadow-sm border border-gray-100">
@@ -641,22 +661,36 @@ export function PipelineDetail() {
                         <p className="truncate text-sm font-semibold text-gray-800">{name}</p>
                         {ext && <p className="mt-0.5 text-xs font-medium text-gray-400 uppercase">{ext}</p>}
                       </div>
-                      <a href={url} target="_blank" rel="noreferrer" download={isImg ? undefined : name}
-                        className="shrink-0 inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 transition-colors shadow-sm">
-                        <Download className="h-4 w-4" />Download
-                      </a>
+                      {isHtml && isAmplifyBlobUrl(url) ? (
+                        <button type="button" onClick={() => {
+                          setArtifactError('');
+                          void downloadHtmlCollateral(url, name).catch((error: unknown) => setArtifactError(error instanceof Error ? error.message : 'HTML collateral could not be downloaded.'));
+                        }} className="shrink-0 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 transition-colors shadow-sm">
+                          <Download className="h-4 w-4" />Download
+                        </button>
+                      ) : (
+                        <a href={url} target="_blank" rel="noreferrer" download={isImg ? undefined : name}
+                          className="shrink-0 inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 transition-colors shadow-sm">
+                          <Download className="h-4 w-4" />Download
+                        </a>
+                      )}
                     </div>
                   );
                 }
 
                 // Try JSON parse first; fall back to legacy single URL
-                let docSlots: { label: string; url: string }[] = [];
+                let docSlots: { label: string; url: string; name?: string }[] = [];
                 try {
                   const parsed = archRaw ? JSON.parse(archRaw) : null;
                   if (parsed && typeof parsed === 'object') {
                     DOC_SLOTS.forEach(({ key, label }) => {
                       if (parsed[key]) docSlots.push({ label, url: parsed[key] });
                     });
+                    if (Array.isArray(parsed.miscellaneous)) {
+                      parsed.miscellaneous.forEach((file: { url?: string; name?: string }) => {
+                        if (file && typeof file.url === 'string' && file.url) docSlots.push({ label: 'Miscellaneous Collateral', url: file.url, name: file.name });
+                      });
+                    }
                   }
                 } catch {
                   // legacy single URL
@@ -670,9 +704,10 @@ export function PipelineDetail() {
                       <h2 className="mb-4 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-400">
                         <FileCode2 className="h-3.5 w-3.5" />Architecture &amp; Documents
                       </h2>
+                      {artifactError && <p className="mb-3 text-sm text-rose-600">{artifactError}</p>}
                       {docSlots.length > 0 ? (
                         <div className="space-y-3">
-                          {docSlots.map(({ label, url }) => renderDocSlot(url, label))}
+                          {docSlots.map(({ label, url, name }) => renderDocSlot(url, label, name))}
                         </div>
                       ) : (
                         <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-10 text-center">
@@ -815,12 +850,15 @@ export function PipelineDetail() {
               {/* ── AI EVALUATION TAB ── */}
               {activeTab === 'ai' && (
                 <>
+                  {evaluationNotice && <p role="status" className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm text-indigo-700">{evaluationNotice}</p>}
                   {!hasAI ? (
                     <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-12 text-center">
                       <Brain className={`mx-auto mb-3 h-10 w-10 text-gray-300 ${submission.status === 'Submitted' ? 'animate-pulse' : ''}`} />
                       <p className="text-sm font-medium text-gray-400">
-                        {submission.status === 'Submitted' ? 'AI evaluation is running…' : 'AI evaluation has not run yet.'}
+                        AI evaluation is pending or has not completed.
                       </p>
+                      {(isAdmin || isOwner) && <Button className="mt-4" disabled={actionLoading !== null || familySaving} onClick={() => void handleAIScoreRetry()}>Queue AI evaluation</Button>}
+                      {actionError && <p role="alert" className="mt-3 text-xs text-rose-600">{actionError}</p>}
                     </div>
                   ) : (
                     <>
@@ -855,10 +893,10 @@ export function PipelineDetail() {
                             </div>
                           </div>
                         </div>
-                        {isAdmin && aiScore === 0 && (
+                        {(isAdmin || isOwner) && recoverableAI && (
                           <div className="mt-5 border-t border-rose-200 pt-4">
                             <p className="mb-3 text-xs font-medium text-rose-700">
-                              The AI evaluation failed. Admins and owners can retry the scoring flow.
+                              The AI evaluation is incomplete or failed. Queue a recovery evaluation.
                             </p>
                             {actionError && (
                               <p className="mb-3 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-medium text-rose-700">{actionError}</p>
@@ -867,7 +905,7 @@ export function PipelineDetail() {
                               size="sm"
                               variant="outline"
                               className="gap-1.5 border-rose-300 bg-white text-rose-700 hover:bg-rose-100"
-                              disabled={actionLoading !== null}
+                              disabled={actionLoading !== null || familySaving}
                               onClick={() => void handleAIScoreRetry()}
                             >
                               <RotateCcw className={`h-3.5 w-3.5 ${actionLoading === 'rescore' ? 'animate-spin' : ''}`} />
@@ -877,6 +915,7 @@ export function PipelineDetail() {
                         )}
                       </div>
 
+                      <ScoreCapDetails feedback={aiFeedback} />
                       {/* Per-agent breakdown */}
                       {agentScores && (
                         <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -885,7 +924,8 @@ export function PipelineDetail() {
                             <p className="mt-0.5 text-xs text-gray-400">Each agent score contributes its weighted % to the composite</p>
                           </div>
                           <div className="divide-y divide-gray-50">
-                            {Object.entries(AGENT_CONFIG).map(([key, cfg]) => {
+                            {Object.entries(AGENT_CONFIG).filter(([key]) => key in evaluationWeights(aiFeedback)).map(([key, original]) => {
+                              const cfg = { ...original, weight: evaluationWeights(aiFeedback)[key] };
                               const score        = agentScores[key] ?? 0;
                               const contrib      = weightedContributions[key] ?? 0;
                               const fb           = agentFeedback?.[key];
@@ -983,9 +1023,21 @@ export function PipelineDetail() {
               {/* ── Comments tab ── */}
               {activeTab === 'comments' && (
                 <div id="submission-comments" className="scroll-mt-24 flex flex-col gap-4">
+                  {isAdmin && (
+                    <div className="flex flex-wrap gap-2" role="tablist" aria-label="Comment conversations">
+                      <button type="button" role="tab" aria-selected={visibleCommentChannel === 'submitter'} onClick={() => { setCommentDraft(''); setCommentChannel('submitter'); }} className={`rounded-lg px-3 py-2 text-xs font-semibold ${visibleCommentChannel === 'submitter' ? 'bg-violet-600 text-white' : 'border border-gray-200 bg-white text-gray-600'}`}>
+                        With Submitter
+                      </button>
+                      <button type="button" role="tab" aria-selected={visibleCommentChannel === 'internal'} onClick={() => { setCommentDraft(''); setCommentChannel('internal'); }} className={`rounded-lg px-3 py-2 text-xs font-semibold ${visibleCommentChannel === 'internal' ? 'bg-violet-600 text-white' : 'border border-gray-200 bg-white text-gray-600'}`}>
+                        Admin &amp; Owner Only
+                      </button>
+                    </div>
+                  )}
                   <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-2.5 text-xs text-amber-700 font-medium flex items-center gap-2">
                     <Shield className="h-3.5 w-3.5 shrink-0" />
-                    Visible to all Admins, Owners, and the submitter. Approval decisions are auto-posted here.
+                    {visibleCommentChannel === 'internal'
+                      ? 'Private conversation for Admins and Owners. The submitter cannot view these messages.'
+                      : 'Visible to the submitter, Admins, and Owners. Approval decisions are posted here.'}
                   </div>
 
                   {/* Thread */}
@@ -1028,10 +1080,11 @@ export function PipelineDetail() {
                       placeholder="Write a comment… (Ctrl+Enter to send)"
                       className="flex-1 resize-none border-0 bg-transparent px-2 py-1 text-sm text-gray-800 outline-none placeholder:text-gray-400"
                     />
+                    <VoiceInputButton onTranscript={text => setCommentDraft(previous => `${previous}${previous.trim() ? ' ' : ''}${text}`)} disabled={commentSending} />
                     <button
                       onClick={() => void handleSendComment()}
                       disabled={!commentDraft.trim() || commentSending}
-                      className="self-end rounded-lg bg-violet-500 p-2 text-white hover:bg-violet-600 disabled:opacity-40 transition-colors"
+                      className="inline-flex h-9 w-9 self-end items-center justify-center rounded-lg bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-40 transition-colors"
                     >
                       <Send className="h-4 w-4" />
                     </button>
@@ -1133,10 +1186,15 @@ export function PipelineDetail() {
                   {actionError && (
                     <p className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{actionError}</p>
                   )}
-                  <textarea value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)}
-                    placeholder="Final comments for this approval decision…"
-                    rows={3}
-                    className="mb-4 w-full rounded-lg border border-amber-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100" />
+                  <FamilyEditor id={submission.id} kind="submission" currentFamily={submission.family} disabled={actionLoading !== null || familySaving} onBusyChange={setFamilySaving}
+                    onSaved={family => setSubmission(current => current ? { ...current, family } : current)} />
+                  <div className="mb-4 flex items-end gap-2 rounded-lg border border-amber-200 bg-white px-2 py-2 focus-within:border-amber-400 focus-within:ring-2 focus-within:ring-amber-100">
+                    <textarea value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)}
+                      placeholder="Final comments for this approval decision…"
+                      rows={3}
+                      className="min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-0.5 text-sm outline-none" />
+                    <VoiceInputButton onTranscript={text => setRejectionNotes(previous => `${previous}${previous.trim() ? ' ' : ''}${text}`)} disabled={actionLoading !== null || familySaving} />
+                  </div>
                   <div className="flex flex-wrap gap-3">
                     {isAdmin && (
                       <Button variant="outline" className="gap-2 border-violet-300 text-violet-700 hover:bg-violet-50"
@@ -1155,7 +1213,7 @@ export function PipelineDetail() {
                       <AlertTriangle className="h-4 w-4" />{actionLoading === 'reject' ? 'Sending back…' : 'Request Changes'}
                     </Button>
                     <Button variant="outline" className="gap-2 border-amber-400 text-amber-700 hover:bg-amber-50"
-                      disabled={actionLoading !== null}
+                      disabled={actionLoading !== null || familySaving}
                       onClick={() => void handleHold()}>
                       <Clock className="h-4 w-4" />{actionLoading === 'hold' ? 'Placing on hold…' : 'Put On Hold'}
                     </Button>
@@ -1165,7 +1223,7 @@ export function PipelineDetail() {
                       <XCircle className="h-4 w-4" />{actionLoading === 'final-reject' ? 'Rejecting…' : 'Reject (Final)'}
                     </Button>
                     <Button className="gap-2 bg-emerald-600 hover:bg-emerald-700"
-                      disabled={actionLoading !== null}
+                      disabled={actionLoading !== null || familySaving}
                       onClick={() => void handleApprove()}>
                       <Check className="h-4 w-4" />{actionLoading === 'approve' ? 'Approving…' : 'Approve Submission'}
                     </Button>
@@ -1190,6 +1248,8 @@ export function PipelineDetail() {
                       </p>
                     </div>
                   </div>
+                  <FamilyEditor id={submission.id} kind="submission" currentFamily={submission.family} disabled={actionLoading !== null || familySaving} onBusyChange={setFamilySaving}
+                    onSaved={family => setSubmission(current => current ? { ...current, family } : current)} />
                   {actionError && (
                     <p className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{actionError}</p>
                   )}
@@ -1208,7 +1268,7 @@ export function PipelineDetail() {
                       <AlertTriangle className="h-4 w-4" />{actionLoading === 'reject' ? 'Returning…' : 'Return for Revision'}
                     </Button>
                     <Button variant="outline" className="gap-2 border-amber-400 text-amber-700 hover:bg-amber-50"
-                      disabled={actionLoading !== null}
+                      disabled={actionLoading !== null || familySaving}
                       onClick={() => void handleHold()}>
                       <Clock className="h-4 w-4" />{actionLoading === 'hold' ? 'Placing on hold…' : 'Put On Hold'}
                     </Button>
@@ -1218,7 +1278,7 @@ export function PipelineDetail() {
                       <XCircle className="h-4 w-4" />{actionLoading === 'final-reject' ? 'Rejecting…' : 'Reject (Final)'}
                     </Button>
                     <Button className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
-                      disabled={actionLoading !== null}
+                      disabled={actionLoading !== null || familySaving}
                       onClick={() => void handlePublish()}>
                       <Rocket className="h-4 w-4" />{actionLoading === 'publish' ? 'Publishing…' : 'Publish to Catalog'}
                     </Button>
@@ -1271,6 +1331,25 @@ export function PipelineDetail() {
                 )}
                 {submission.catalog_code && (
                   <MetaItem icon={Hash} label="Catalog ID" value={submission.catalog_code} />
+                )}
+              </div>
+
+              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Owner &amp; Review</h3>
+                <MetaItem icon={User} label="Asset Owner" value={submission.owner_name || submission.owner_email || 'Not provided'} />
+                {submission.owner_name && submission.owner_email && <MetaItem icon={User} label="Owner Email" value={submission.owner_email} />}
+                {submission.assigned_reviewer_id && <MetaItem icon={User} label="Assigned Reviewer" value={submission.assigned_reviewer_name || submission.assigned_reviewer_email || 'Assigned'} />}
+                {submission.reviewed_at && (
+                  <>
+                    <MetaItem icon={User} label={['Approved', 'Published'].includes(submission.status) ? 'Approved By (L1)' : 'Reviewed By'} value={submission.reviewed_by_name || submission.reviewed_by_email || 'Reviewer unavailable'} />
+                    <MetaItem icon={Calendar} label={['Approved', 'Published'].includes(submission.status) ? 'Approved At' : 'Reviewed At'} value={new Date(submission.reviewed_at).toLocaleString()} />
+                  </>
+                )}
+                {submission.published_at && (
+                  <>
+                    <MetaItem icon={User} label="Published By (L2)" value={submission.published_by_name || submission.published_by_email || 'Publisher unavailable'} />
+                    <MetaItem icon={Calendar} label="Published At" value={new Date(submission.published_at).toLocaleString()} />
+                  </>
                 )}
               </div>
 

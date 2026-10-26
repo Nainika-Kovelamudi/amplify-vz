@@ -5,7 +5,7 @@ from app.db.models import CatalogAsset
 
 
 async def next_catalog_code(db: AsyncSession, family: str) -> str:
-    prefix = {"forge": "FOR", "atlas": "ATL", "sentinel": "SNT", "titan": "TIT"}.get(
+    prefix = {"forge": "FRG", "atlas": "ATL", "sentinel": "STL", "titan": "TTN"}.get(
         (family or "").strip().lower(), (family or "AST")[:3].upper()
     )
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"), {"lock_key": f"catalog-code-{prefix}"})

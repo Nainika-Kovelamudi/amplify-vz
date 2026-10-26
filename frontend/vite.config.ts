@@ -13,6 +13,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      '/assistant':     { target: 'http://localhost:8000', changeOrigin: true },
       '/auth':          { target: 'http://localhost:8000', changeOrigin: true },
       '/catalog':       { target: 'http://localhost:8000', changeOrigin: true },
       '/submissions':   { target: 'http://localhost:8000', changeOrigin: true },

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from app.services.blob_service import refresh_sas_url
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -163,7 +164,7 @@ def _to_response(asset: CatalogAsset, owner_name: str | None = None, clone_reque
         cloud_provider=asset.cloud_provider,
         maturity=asset.maturity.value if hasattr(asset.maturity, "value") else asset.maturity,
         demo_ready=asset.demo_ready,
-        video_url=asset.video_url,
+        video_url=refresh_sas_url(asset.video_url),
         demo_url=asset.demo_url,
         repo_url=asset.repo_url,
         thumbnail_url=asset.thumbnail_url,

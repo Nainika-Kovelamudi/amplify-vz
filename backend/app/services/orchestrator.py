@@ -7,7 +7,7 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import CatalogAsset, Submission, SubmissionStatus
+from app.db.models import CatalogAsset, Submission, SubmissionStatus, AssetStatus
 from app.services.agents.demo_readiness_agent import DemoReadinessAgent
 from app.services.agents.description_agent import DescriptionAgent
 from app.services.agents.document_validation_agent import DocumentValidationAgent
@@ -20,6 +20,10 @@ from app.services.document_reader import extract_document_text
 from app.services.url_validator import validate_video_url, validate_demo_url, validate_repo_url
 
 logger = logging.getLogger(__name__)
+
+
+class SupersededEvaluation(RuntimeError):
+    pass
 
 WEIGHTS = {
     "relevance": 0.18,
@@ -196,46 +200,66 @@ async def run_scoring_pipeline(
     options = _submission_data or {}
     preserve_status = options.get("preserve_status")
     sync_catalog_asset_id = options.get("sync_catalog_asset_id")
+    is_catalog = _entity_type == "catalog_asset"
     try:
         await _run_scoring_pipeline_inner(
             submission_id,
             preserve_status=preserve_status,
             sync_catalog_asset_id=sync_catalog_asset_id,
+            entity_type=_entity_type, options=options,
         )
     except Exception as exc:
+        if isinstance(exc, SupersededEvaluation):
+            raise
         logger.error("Scoring pipeline crashed for %s: %s", submission_id, exc, exc_info=True)
         # Mark submission as needing changes so it doesn't stay stuck at Submitted
         try:
             async with get_session_factory()() as db:
-                result = await db.execute(select(Submission).where(Submission.id == submission_id))
+                model = CatalogAsset if is_catalog else Submission
+                result = await db.execute(select(model).where(model.id == submission_id))
                 sub = result.scalars().first()
+                if sub and options.get('expected_updated_at') and sub.updated_at.isoformat() != options['expected_updated_at']:
+                    raise SupersededEvaluation('Newer metadata must not be marked as failed')
+                if options.get('job_id'):
+                    from app.db.operations_models import EvaluationJob
+                    lease = await db.get(EvaluationJob, options['job_id'])
+                    if not lease or lease.lease_token != options.get('lease_token') or lease.state != 'Running':
+                        raise SupersededEvaluation('Obsolete job must not mark evaluation failed')
                 if sub and sub.ai_score is None:
                     sub.ai_score = 0
-                    if sub.status == SubmissionStatus.Submitted:
+                    if not is_catalog and sub.status == SubmissionStatus.Submitted:
                         sub.status = SubmissionStatus.Needs_Changes
-                    sub.ai_feedback = {"summary": "AI evaluation encountered an error. Please resubmit.", "error": str(exc)}
+                    sub.ai_feedback = {"summary": "AI evaluation encountered an error. Please resubmit.", "error": "Evaluation failed; check provider configuration and backend logs."}
                     await db.commit()
         except Exception as inner:
             logger.error("Failed to mark submission %s as failed: %s", submission_id, inner)
+        if options.get("job_run"):
+            raise
 
 
 async def _run_scoring_pipeline_inner(
     submission_id: str,
     preserve_status: str | None = None,
     sync_catalog_asset_id: str | None = None,
+    entity_type: str | None = None, options: dict | None = None,
 ) -> None:
     from app.db.base import get_session_factory
     async with get_session_factory()() as db:
-        result = await db.execute(select(Submission).where(Submission.id == submission_id))
+        is_catalog = entity_type == "catalog_asset"
+        model = CatalogAsset if is_catalog else Submission
+        result = await db.execute(select(model).where(model.id == submission_id))
         submission = result.scalars().first()
         if not submission:
             logger.error("Scoring pipeline: submission %s not found", submission_id)
             return
 
+        from app.services.evaluation_jobs import evaluation_fingerprint
+        input_fingerprint = evaluation_fingerprint(submission)
+
         existing_entries = await _fetch_existing_entries(
             db,
             exclude_submission_id=submission_id,
-            exclude_catalog_asset_id=submission.catalog_code or None,
+            exclude_catalog_asset_id=str(submission.id) if is_catalog else submission.catalog_code or None,
         )
 
         # Run document extraction + URL validation concurrently (before agents)
@@ -302,7 +326,7 @@ async def _run_scoring_pipeline_inner(
             "doc_file_type": doc_file_type,
             "existing_entries": existing_entries,
             # Re-submission flag — set when editing an existing published asset
-            "is_resubmission": bool(submission.catalog_code and _is_uuid(submission.catalog_code)),
+            "is_resubmission": bool(is_catalog or (submission.catalog_code and _is_uuid(submission.catalog_code))),
             # URL validation metadata
             "video_meta": video_meta,
             "demo_meta": demo_meta,
@@ -339,7 +363,16 @@ async def _run_scoring_pipeline_inner(
                 else:
                     results[name] = {"score": 0, "feedback": "Agent error.", "confidence": 0.0}
             else:
-                results[name] = result_or_exc
+                import math
+                valid_score = (isinstance(result_or_exc,dict) and isinstance(result_or_exc.get('score'),(int,float))
+                    and not isinstance(result_or_exc.get('score'),bool) and math.isfinite(result_or_exc['score'])
+                    and 0 <= result_or_exc['score'] <= 100)
+                if name != 'pre_approval' and not valid_score:
+                    results[name] = {'score':0,'confidence':0.0,'feedback':'Agent error: invalid score.'}
+                elif name == 'pre_approval' and not isinstance(result_or_exc,dict):
+                    results[name] = PreApprovalCheckAgent()._fallback()
+                else:
+                    results[name] = result_or_exc
 
         pre_approval_result = results.pop("pre_approval")
 
@@ -440,8 +473,15 @@ async def _run_scoring_pipeline_inner(
                 feedback_lines.append(f"**{name.replace('_', ' ').title()}**: {fb}")
 
         ai_feedback = {
+            "input_fingerprint": input_fingerprint,
             "summary": _classify_summary(total_score),
             "composite_score": round(total_score, 2),
+            "weights": {key: round(value * 100) for key, value in WEIGHTS.items()},
+            "raw_score": round(raw_score, 2),
+            "applied_cap": effective_cap,
+            "completeness_cap": score_cap,
+            "checklist_cap": checklist_cap,
+            "missing_fields": missing_fields,
             "agent_scores": {n: r["score"] for n, r in results.items()},
             "agent_feedback": results,
             "checklist": pre_approval_result,
@@ -451,17 +491,38 @@ async def _run_scoring_pipeline_inner(
             "similar_to": similar_to or None,
         }
 
+        # A job can be reclaimed after a restart; never persist results from an
+        # obsolete lease or overwrite metadata edited while evaluation was running.
+        job_options = options or {}
+        if job_options.get('job_id'):
+            from app.db.operations_models import EvaluationJob
+            lease = (await db.execute(select(EvaluationJob.id).where(
+                EvaluationJob.id == job_options['job_id'], EvaluationJob.lease_token == job_options['lease_token'],
+                EvaluationJob.state == 'Running').with_for_update())).scalar_one_or_none()
+            if not lease: raise SupersededEvaluation('Evaluation lease was superseded')
+            await db.refresh(submission)
+            version = job_options.get('expected_updated_at')
+            if version and submission.updated_at.isoformat() != version:
+                raise SupersededEvaluation('Asset changed during evaluation; retry with current metadata')
+        failed_agents = [name for name, result in results.items()
+                         if result.get('confidence') == 0 and 'error' in str(result.get('feedback', '')).lower()]
+        if any('agent error' in str(item.get('note','')).lower() for item in pre_approval_result.values() if isinstance(item,dict)):
+            failed_agents.append('pre_approval')
+        ai_feedback['evaluation_status'] = 'Failed' if failed_agents else 'Complete'
+        ai_feedback['evaluated_at'] = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
+        if failed_agents:
+            ai_feedback['error'] = 'One or more evaluation agents failed. Retry after checking provider configuration.'
+            ai_feedback['failed_agents'] = failed_agents
         submission.ai_score = round(total_score, 2)
         submission.ai_feedback = ai_feedback
 
         # All submissions with score >= 60 go to admin for manual review
         # Score < 60 → AI asks user to improve and resubmit
+        status_type = AssetStatus if is_catalog else SubmissionStatus
         if preserve_status:
-            submission.status = SubmissionStatus(preserve_status)
-        elif total_score >= MANUAL_REVIEW_THRESHOLD:
-            submission.status = SubmissionStatus.Manual_Approval
-        else:
-            submission.status = SubmissionStatus.Needs_Changes
+            submission.status = status_type(preserve_status)
+        elif not failed_agents:
+            submission.status = status_type.Manual_Approval if total_score >= MANUAL_REVIEW_THRESHOLD else status_type.Needs_Changes
 
         if sync_catalog_asset_id:
             import uuid as _uuid
@@ -480,13 +541,22 @@ async def _run_scoring_pipeline_inner(
                     sync_catalog_asset_id,
                 )
 
+        if is_catalog:
+            from sqlalchemy import or_
+            published_sources=(await db.execute(select(Submission).where(
+                Submission.status==SubmissionStatus.Published,
+                or_(Submission.catalog_code==str(submission.id),Submission.catalog_code==submission.catalog_code))
+                .order_by(Submission.created_at.desc()).with_for_update())).scalars().all()
+            for source in published_sources:
+                if evaluation_fingerprint(source)==input_fingerprint:
+                    source.ai_score=submission.ai_score;source.ai_feedback=submission.ai_feedback
         await db.commit()
         logger.info(
             "Scoring complete for %s — score=%.1f status=%s",
             submission_id, total_score, submission.status,
         )
 
-        if preserve_status:
+        if preserve_status or is_catalog or failed_agents:
             return
 
         # Notify submitter and (if passed) all admins

@@ -1,10 +1,11 @@
 from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
+from app.schemas.metadata_rules import MetadataRules, require_create_metadata
 
 
-class CatalogAssetBase(BaseModel):
+class CatalogAssetBase(MetadataRules):
     aiv_ideation_id: Optional[str] = None
     aiv_ideation_title: Optional[str] = None
     title: str
@@ -32,10 +33,11 @@ class CatalogAssetBase(BaseModel):
 
 
 class CatalogAssetCreate(CatalogAssetBase):
+    _required = model_validator(mode="after")(require_create_metadata)
     repo_url: Optional[str] = None  # stored server-side, never returned
 
 
-class CatalogAssetUpdate(BaseModel):
+class CatalogAssetUpdate(MetadataRules):
     aiv_ideation_id: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None

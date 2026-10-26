@@ -5,6 +5,9 @@ import { authStore, type AppUser } from '../store/authStore';
 const IS_LOCAL_DEV = import.meta.env.VITE_API_URL?.includes('localhost') ||
                      import.meta.env.VITE_API_URL?.includes('127.0.0.1');
 
+let redirectResult: Promise<void> | undefined;
+let loginStarting = false;
+
 export async function login(devEmail?: string): Promise<void> {
   if (IS_LOCAL_DEV) {
     // Bypass MSAL — call dev-login endpoint directly
@@ -20,15 +23,18 @@ export async function login(devEmail?: string): Promise<void> {
     return;
   }
 
-  // Clear any stale MSAL interaction lock before redirecting — a previous
-  // incomplete login attempt can leave interaction_in_progress in sessionStorage
-  // which silently blocks the next loginRedirect call.
-  Object.keys(sessionStorage)
-    .filter(k => k.includes('interaction.status') || k.includes('interaction_in_progress'))
-    .forEach(k => sessionStorage.removeItem(k));
-
-  // Use redirect flow to avoid COOP/window.closed warnings from popup
-  await msalInstance.loginRedirect(loginRequest);
+  if (loginStarting) return;
+  loginStarting = true;
+  try {
+    await handleRedirectResult();
+    await msalInstance.loginRedirect(loginRequest);
+  } catch (error) {
+    loginStarting = false;
+    if ((error as { errorCode?: string }).errorCode === 'interaction_in_progress') {
+      throw new Error('Microsoft sign-in is already in progress. Finish it in the original tab, then try again.');
+    }
+    throw error;
+  }
   // Execution stops here — browser navigates away; handleRedirectResult() picks up on return
 }
 
@@ -62,9 +68,15 @@ async function _warmBackend(): Promise<void> {
 
 // Called once on app startup to process the Azure AD redirect response.
 // If the user just returned from loginRedirect, exchanges the id_token for an Amplify JWT.
-export async function handleRedirectResult(): Promise<void> {
-  if (IS_LOCAL_DEV) return;
-  try {
+export function handleRedirectResult(): Promise<void> {
+  if (IS_LOCAL_DEV) return Promise.resolve();
+  // Share the complete redirect and backend exchange across startup, callback,
+  // and React StrictMode effects. Process each response only once per page.
+  return redirectResult ??= completeRedirectResult();
+}
+
+async function completeRedirectResult(): Promise<void> {
+    await msalInstance.initialize();
     const result = await msalInstance.handleRedirectPromise();
     console.log('[MSAL] handleRedirectPromise result:', result ? 'got token' : 'null (no redirect)');
     if (!result) return; // Not a redirect return — normal page load
@@ -83,9 +95,6 @@ export async function handleRedirectResult(): Promise<void> {
       timeout: 90_000,
     });
     authStore.getState().setAuth(data.access_token, user);
-  } catch (err) {
-    console.error('[MSAL] Redirect result handling failed:', err);
-  }
 }
 
 export async function loadCurrentUser(): Promise<AppUser | null> {
@@ -95,8 +104,9 @@ export async function loadCurrentUser(): Promise<AppUser | null> {
     const { data } = await apiClient.get<AppUser>('/auth/me');
     authStore.setState({ user: data });
     return data;
-  } catch {
-    authStore.getState().logout();
+  } catch (e: unknown) {
+    const status = (e as { response?: { status?: number } })?.response?.status;
+    if (status === 401) authStore.getState().logout();
     return null;
   }
 }

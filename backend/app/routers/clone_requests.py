@@ -49,7 +49,7 @@ async def create_clone_request(
     db: AsyncSession = Depends(get_db),
     user=require_role("Aimplify.User", "Aimplify.Admin", "Aimplify.Owner"),
 ) -> CloneRequestResponse:
-    from app.services.email_service import send_clone_request_email
+    from app.services.email_service import send_clone_request_email, send_clone_request_confirmation_email
     from app.config import get_settings
 
     asset_result = await db.execute(
@@ -95,9 +95,9 @@ async def create_clone_request(
     recipients: list[str] = []
     if owner:
         recipients.append(owner.email)
-    # Also notify all platform admins
+    # Also notify all platform admins and owners
     admin_result = await db.execute(
-        _select(UserProfile).where(UserProfile.role == UserRole.admin)
+        _select(UserProfile).where(UserProfile.role.in_([UserRole.admin, UserRole.owner]))
     )
     for admin in admin_result.scalars().all():
         if admin.email not in recipients:
@@ -111,6 +111,17 @@ async def create_clone_request(
             )
         except Exception as exc:
             logger.warning("Failed to send clone request email to %s: %s", email, exc)
+
+    # Confirmation to the requester
+    try:
+        await send_clone_request_confirmation_email(
+            requester_email=user.email,
+            asset_title=asset.title,
+            reason=body.reason,
+            environment=body.environment.value if hasattr(body.environment, "value") else str(body.environment),
+        )
+    except Exception as exc:
+        logger.warning("Failed to send clone confirmation to requester: %s", exc)
 
     return _to_response(clone_req)
 

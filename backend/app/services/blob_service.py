@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator, Optional, Union
 
@@ -51,7 +52,10 @@ async def upload_blob_stream(
             stream,
             overwrite=True,
             length=length,
-            content_settings=ContentSettings(content_type=content_type),
+            content_settings=ContentSettings(
+                content_type=content_type,
+                content_disposition="attachment" if blob_name.lower().endswith((".html", ".htm", ".js")) else None,
+            ),
             max_concurrency=4,
         )
 
@@ -86,7 +90,10 @@ async def upload_blob(blob_name: str, data: bytes, content_type: str) -> str:
         await blob_client.upload_blob(
             data,
             overwrite=True,
-            content_settings=ContentSettings(content_type=content_type),
+            content_settings=ContentSettings(
+                content_type=content_type,
+                content_disposition="attachment" if blob_name.lower().endswith((".html", ".htm", ".js")) else None,
+            ),
         )
 
     # Return a 10-year SAS URL so stored URLs don't expire in practice
@@ -168,6 +175,72 @@ def make_direct_upload_urls(blob_name: str, expiry_minutes: int = 30) -> tuple[s
     )
     base_url = f"https://{settings.blob_account_name}.blob.core.windows.net/{CONTAINER}/{blob_name}"
     return f"{base_url}?{token}", _make_sas_url(
+        blob_name,
+        account_name=settings.blob_account_name,
+        account_key=settings.blob_account_key,
+        expiry_hours=24 * 365 * 10,
+    )
+
+
+def make_html_attachment_url(blob_name: str, download_name: str = "") -> str:
+    """Issue a short-lived direct download link that cannot render HTML inline."""
+    settings = get_settings()
+    if not settings.blob_account_name or not settings.blob_account_key:
+        raise RuntimeError("Blob account name/key are required for direct downloads.")
+    filename = os.path.basename(download_name or blob_name).replace('"', "").replace("\r", "").replace("\n", "")
+    if not filename.lower().endswith((".html", ".htm")):
+        filename = os.path.basename(blob_name)
+    token = generate_blob_sas(
+        account_name=settings.blob_account_name,
+        container_name=CONTAINER,
+        blob_name=blob_name,
+        account_key=settings.blob_account_key,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.now(tz=timezone.utc) + timedelta(minutes=5),
+        content_disposition=f'attachment; filename="{filename}"',
+        content_type="application/octet-stream",
+        cache_control="no-store",
+    )
+    from urllib.parse import quote
+
+    return f"https://{settings.blob_account_name}.blob.core.windows.net/{CONTAINER}/{quote(blob_name, safe='/')}?{token}"
+
+
+def extract_blob_name(url: str) -> str | None:
+    """Extract the blob path from a stored Azure Blob URL (with or without SAS token).
+
+    e.g. https://account.blob.core.windows.net/artifacts/family/id/videos/file.mp4?sv=...
+    returns 'family/id/videos/file.mp4'
+    """
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        # path is like /artifacts/family/id/videos/file.mp4
+        path = parsed.path.lstrip("/")
+        # strip the container prefix
+        container_prefix = CONTAINER + "/"
+        if path.startswith(container_prefix):
+            return path[len(container_prefix):]
+    except Exception:
+        pass
+    return None
+
+
+def refresh_sas_url(stored_url: str | None) -> str | None:
+    """Return a fresh 10-year SAS URL for a stored blob URL, regenerating the token.
+
+    If the stored URL has an expired SAS, this replaces it with a valid one.
+    Returns None if the URL is None or the blob name cannot be extracted.
+    """
+    if not stored_url:
+        return stored_url
+    blob_name = extract_blob_name(stored_url)
+    if not blob_name:
+        return stored_url  # can't parse — return as-is
+    settings = get_settings()
+    if not settings.blob_account_name or not settings.blob_account_key:
+        return stored_url  # no key available — return as-is
+    return _make_sas_url(
         blob_name,
         account_name=settings.blob_account_name,
         account_key=settings.blob_account_key,

@@ -1,3 +1,4 @@
+import { ChatWidget } from '../assistant/ChatWidget';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Home, LayoutGrid, ListChecks, PlusCircle, Search, X, LogOut, ChevronDown, Settings, ShieldCheck, HelpCircle, Mail, MessageCircle, BookOpen, ExternalLink, ArrowRight, Sparkles, Loader2, Bell, BarChart3, Lightbulb, Menu } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -9,7 +10,8 @@ import { getAdminStats } from '../../lib/adminService';
 import { getCatalog, type CatalogAsset } from '../../lib/catalogService';
 import { useFamilies } from '../../context/FamiliesContext';
 import { CopyrightFooter } from './CopyrightFooter';
-import { getNotifications, markNotificationsRead, type Notification } from '../../lib/notificationService';
+import { getNotifications, markNotificationsRead, notificationDetailPath, type Notification } from '../../lib/notificationService';
+import { getChatbotConfig } from '../../lib/assistantService';
 
 export function MainLayout() {
   const navigate = useNavigate();
@@ -30,6 +32,7 @@ export function MainLayout() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const notifRef = useRef<HTMLDivElement>(null);
+  const [chatbotEnabled, setChatbotEnabled] = useState(false);
 
   // ── Spotlight search state ──────────────────────────────────────────────
   const [searchOpen,    setSearchOpen]    = useState(false);
@@ -40,6 +43,22 @@ export function MainLayout() {
 
   const isAdmin = user?.role === 'Aimplify.Admin' || user?.role === 'Aimplify.Owner';
   const isSuperAdmin = user?.role === 'Aimplify.Owner';
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setChatbotEnabled(false);
+      return;
+    }
+    let active = true;
+    const refresh = () => {
+      void getChatbotConfig()
+        .then(({ enabled }) => { if (active) setChatbotEnabled(enabled); })
+        .catch(() => { if (active) setChatbotEnabled(false); });
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 60_000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!loading && !isAuthenticated) {
@@ -59,7 +78,9 @@ export function MainLayout() {
       }
     }
 
-    void hydratePendingCount();
+    void hydratePendingCount().catch(() => {
+      // Keep the last known badge count when submissions are temporarily unavailable.
+    });
 
     return () => {
       cancelled = true;
@@ -133,6 +154,26 @@ export function MainLayout() {
     await markNotificationsRead();
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     setUnreadCount(0);
+  };
+
+  const handleNotificationClick = async (notification: Notification) => {
+    setNotifOpen(false);
+    if (!notification.read) {
+      setNotifications((prev) => prev.map((item) => item.id === notification.id ? { ...item, read: true } : item));
+      setUnreadCount((count) => Math.max(0, count - 1));
+      void markNotificationsRead([notification.id]).catch(() => {
+        void getNotifications({ limit: 30 }).then((result) => {
+          setNotifications(result.items);
+          setUnreadCount(result.unread_count);
+        }).catch(() => {});
+      });
+    }
+
+    try {
+      navigate(await notificationDetailPath(notification));
+    } catch {
+      navigate('/pipeline');
+    }
   };
 
   // Debounced search
@@ -398,8 +439,9 @@ export function MainLayout() {
                   ) : (
                     <ul className="divide-y divide-gray-50">
                       {notifications.map((n) => (
-                        <li key={n.id} className={cn('px-4 py-3 transition-colors', !n.read && 'bg-sky-50/60')}>
-                          <div className="flex items-start gap-2">
+                        <li key={n.id}>
+                          <button type="button" onClick={() => void handleNotificationClick(n)}
+                            className={cn('flex w-full cursor-pointer items-start gap-2 px-4 py-3 text-left transition-colors hover:bg-sky-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400', !n.read && 'bg-sky-50/60')}>
                             {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-sky-500" />}
                             {n.read && <span className="mt-1.5 h-2 w-2 shrink-0" />}
                             <div className="min-w-0 flex-1">
@@ -409,7 +451,7 @@ export function MainLayout() {
                                 {new Date(n.created_at).toLocaleString()}
                               </p>
                             </div>
-                          </div>
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -699,6 +741,7 @@ export function MainLayout() {
           </>
         )}
       </AnimatePresence>
+      {isAuthenticated && chatbotEnabled && <ChatWidget key={user?.id} />}
     </div>
   );
 }

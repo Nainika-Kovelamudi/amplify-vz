@@ -2,7 +2,9 @@ import { apiClient } from './apiClient';
 
 export interface DemoRequest {
   id: string;
-  asset_id: string;
+  batch_id?: string | null;
+  asset_id: string | null;
+  request_type?: 'asset' | 'platform';
   asset_title?: string;
   asset_slug?: string;
   requester_name?: string;

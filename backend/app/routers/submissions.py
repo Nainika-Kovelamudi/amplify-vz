@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
@@ -16,7 +16,11 @@ from app.schemas.submission import (
     SubmissionResponse,
     SubmissionUpdate,
 )
+from app.services.blob_service import refresh_sas_url
 from app.services.catalog_code_service import next_catalog_code
+
+from app.services.family_assignment import FamilyUpdate, change_family
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/submissions", tags=["Submissions"])
@@ -35,8 +39,8 @@ def _to_response(s: Submission, catalog_asset_id: str | None = None) -> Submissi
         maturity=s.maturity,
         demo_ready=s.demo_ready,
         repo_url=s.repo_url,
-        video_url=s.video_url,
-        video_urls=list(dict.fromkeys(s.video_urls or ([s.video_url] if s.video_url else []))),
+        video_url=refresh_sas_url(s.video_url),
+        video_urls=[refresh_sas_url(u) for u in dict.fromkeys(s.video_urls or ([s.video_url] if s.video_url else [])) if u],
         demo_url=s.demo_url,
         status=s.status.value if hasattr(s.status, "value") else s.status,
         ai_score=s.ai_score,
@@ -45,6 +49,10 @@ def _to_response(s: Submission, catalog_asset_id: str | None = None) -> Submissi
         submitter_id=s.submitter_id,
         created_at=s.created_at,
         updated_at=s.updated_at,
+        reviewed_by=s.reviewed_by,
+        reviewed_at=s.reviewed_at,
+        assigned_reviewer_id=s.assigned_reviewer_id,
+        assigned_at=s.assigned_at,
         # Section 1 — submitter info
         owner_name=s.owner_name,
         owner_email=s.owner_email,
@@ -59,6 +67,40 @@ def _to_response(s: Submission, catalog_asset_id: str | None = None) -> Submissi
         aiv_ideation_id=s.aiv_ideation_id,
         aiv_ideation_title=s.aiv_ideation_title,
     )
+
+
+async def _with_review_details(db: AsyncSession, sub: Submission) -> SubmissionResponse:
+    response = _to_response(sub)
+    profile_ids = [profile_id for profile_id in (sub.submitter_id, sub.reviewed_by, sub.assigned_reviewer_id) if profile_id]
+    profiles = (await db.execute(select(UserProfile).where(UserProfile.id.in_(profile_ids)))).scalars().all() if profile_ids else []
+    by_id = {profile.id: profile for profile in profiles}
+    reviewer = by_id.get(sub.reviewed_by)
+    assigned = by_id.get(sub.assigned_reviewer_id)
+    submitter = by_id.get(sub.submitter_id)
+    if submitter:
+        response.owner_name = response.owner_name or submitter.display_name
+        response.owner_email = response.owner_email or submitter.email
+    if reviewer:
+        response.reviewed_by_name = reviewer.display_name
+        response.reviewed_by_email = reviewer.email
+    if assigned:
+        response.assigned_reviewer_name = assigned.display_name
+        response.assigned_reviewer_email = assigned.email
+    publication = (await db.execute(
+        select(ActivityLog).where(
+            ActivityLog.action == "submission_published",
+            ActivityLog.entity_id == sub.id,
+        ).order_by(ActivityLog.created_at.desc()).limit(1)
+    )).scalars().first()
+    if publication:
+        response.published_by = publication.actor_id
+        response.published_at = publication.created_at
+        if publication.actor_id:
+            publisher = (await db.execute(select(UserProfile).where(UserProfile.id == publication.actor_id))).scalars().first()
+            if publisher:
+                response.published_by_name = publisher.display_name
+                response.published_by_email = publisher.email
+    return response
 
 
 @router.post("", response_model=SubmissionResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -155,8 +197,9 @@ async def create_submission(
         "submitter_email": user.email,
         "entity": "submission",
     }
+    from app.services.evaluation_jobs import enqueue_evaluation
+    await enqueue_evaluation(db, submission.id, "submission", user.id)
     await db.commit()
-    background_tasks.add_task(run_scoring_pipeline, str(submission.id), submission_data, "submission")
 
     # Email requestor: submission received
     submitter_name = getattr(user, 'display_name', None) or user.email
@@ -236,7 +279,7 @@ async def get_submission_for_catalog_asset(
             )
             sub = sub_result.scalars().first()
             if sub:
-                return _to_response(sub)
+                return await _with_review_details(db, sub)
 
         raise HTTPException(status_code=404, detail="Original submission not found.")
 
@@ -245,7 +288,58 @@ async def get_submission_for_catalog_asset(
     if not sub:
         raise HTTPException(status_code=404, detail="Submission record not found.")
 
-    return _to_response(sub)
+    return await _with_review_details(db, sub)
+
+
+async def _latest_asset_submissions(db: AsyncSession, submitter_id=None) -> list[SubmissionResponse]:
+    """Show the newest submission for each asset while retaining older rows for audit."""
+    stmt = select(Submission)
+    if submitter_id is not None:
+        stmt = stmt.where(Submission.submitter_id == submitter_id)
+    submissions = (await db.execute(
+        stmt.order_by(Submission.created_at.desc(), Submission.id.desc())
+    )).scalars().all()
+
+    publication_logs = (await db.execute(
+        select(ActivityLog).where(ActivityLog.action == "submission_published")
+    )).scalars().all()
+    published_asset_by_submission = {
+        str(log.entity_id): str((log.log_metadata or {}).get("catalog_asset_id"))
+        for log in publication_logs
+        if log.entity_id and (log.log_metadata or {}).get("catalog_asset_id")
+    }
+    assets = (await db.execute(select(CatalogAsset))).scalars().all()
+    asset_by_code = {asset.catalog_code: str(asset.id) for asset in assets if asset.catalog_code}
+    asset_by_identity = {
+        ((asset.title or "").strip().casefold(), str(asset.owner_id)): str(asset.id)
+        for asset in assets
+    }
+    asset_by_ideation = {
+        (str(asset.aiv_ideation_id), str(asset.owner_id)): str(asset.id)
+        for asset in assets if asset.aiv_ideation_id
+    }
+
+    seen: set[str] = set()
+    latest: list[SubmissionResponse] = []
+    for submission in submissions:
+        code = str(submission.catalog_code) if submission.catalog_code else None
+        asset_id = (
+            asset_by_code.get(code)
+            or code
+            or published_asset_by_submission.get(str(submission.id))
+            or asset_by_ideation.get((str(submission.aiv_ideation_id), str(submission.submitter_id)))
+            or asset_by_identity.get(((submission.title or "").strip().casefold(), str(submission.submitter_id)))
+        )
+        key = (
+            f"asset:{asset_id}" if asset_id else
+            f"ideation:{submission.submitter_id}:{submission.aiv_ideation_id}" if submission.aiv_ideation_id else
+            f"title:{submission.submitter_id}:{(submission.title or '').strip().casefold()}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        latest.append(_to_response(submission, asset_id))
+    return latest
 
 
 @router.get("/mine", response_model=SubmissionListResponse)
@@ -255,12 +349,8 @@ async def get_my_submissions(
     db: AsyncSession = Depends(get_db),
     user=require_role("Aimplify.User", "Aimplify.Admin", "Aimplify.Owner"),
 ) -> SubmissionListResponse:
-    stmt = select(Submission).where(Submission.submitter_id == user.id)
-    count = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
-    result = await db.execute(
-        stmt.order_by(Submission.created_at.desc()).offset(skip).limit(limit)
-    )
-    return SubmissionListResponse(items=[_to_response(s) for s in result.scalars().all()], total=count)
+    latest = await _latest_asset_submissions(db, user.id)
+    return SubmissionListResponse(items=latest[skip:skip + limit], total=len(latest))
 
 
 @router.get("/all", response_model=SubmissionListResponse)
@@ -272,44 +362,13 @@ async def get_all_submissions(
     user=require_role("Aimplify.Owner"),
 ) -> SubmissionListResponse:
     """Owner (super_admin) sees every submission across all users."""
-    stmt = select(Submission)
+    latest = await _latest_asset_submissions(db)
     if status_filter:
         try:
-            stmt = stmt.where(Submission.status == SubmissionStatus[status_filter])
+            latest = [item for item in latest if item.status == SubmissionStatus[status_filter].value]
         except KeyError:
             pass
-    count = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
-    result = await db.execute(
-        stmt.order_by(Submission.created_at.desc()).offset(skip).limit(limit)
-    )
-    submissions = list(result.scalars().all())
-
-    # Resolve every revision to its logical catalog asset. Newer edit submissions
-    # carry catalog_code directly; older published rows are recovered from the
-    # publication audit log or, for legacy rows, from title + owner.
-    publication_logs = (await db.execute(
-        select(ActivityLog).where(ActivityLog.action == "submission_published")
-    )).scalars().all()
-    published_asset_by_submission = {
-        str(log.entity_id): str((log.log_metadata or {}).get("catalog_asset_id"))
-        for log in publication_logs
-        if log.entity_id and (log.log_metadata or {}).get("catalog_asset_id") not in (None, "", "None")
-    }
-    catalog_assets = list((await db.execute(select(CatalogAsset))).scalars().all())
-    legacy_asset_by_identity = {
-        ((asset.title or "").strip().lower(), str(asset.owner_id)): str(asset.id)
-        for asset in catalog_assets
-    }
-
-    items = []
-    for submission in submissions:
-        asset_id = (
-            submission.catalog_code
-            or published_asset_by_submission.get(str(submission.id))
-            or legacy_asset_by_identity.get(((submission.title or "").strip().lower(), str(submission.submitter_id)))
-        )
-        items.append(_to_response(submission, asset_id))
-    return SubmissionListResponse(items=items, total=count)
+    return SubmissionListResponse(items=latest[skip:skip + limit], total=len(latest))
 
 
 @router.get("/{submission_id}", response_model=SubmissionResponse)
@@ -328,7 +387,50 @@ async def get_submission(
     if role_val == "guest" and str(sub.submitter_id) != str(user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
 
-    return _to_response(sub)
+    return await _with_review_details(db, sub)
+
+
+@router.get("/{submission_id}/versions", response_model=list[SubmissionResponse])
+async def get_submission_versions(
+    submission_id: str,
+    db: AsyncSession = Depends(get_db),
+    user=require_role("Aimplify.User", "Aimplify.Admin", "Aimplify.Owner"),
+) -> list[SubmissionResponse]:
+    """Return all recorded submissions for the same catalog asset, oldest first."""
+    base = (await db.execute(select(Submission).where(Submission.id == submission_id))).scalars().first()
+    if not base:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+    role = user.role.value if hasattr(user.role, "value") else user.role
+    if role not in ("Aimplify.Admin", "Aimplify.Owner") and base.submitter_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+
+    logs = (await db.execute(select(ActivityLog).where(
+        ActivityLog.action == "submission_published",
+        ActivityLog.entity_id == base.id,
+    ))).scalars().all()
+    asset_id = next((str(log.log_metadata.get("catalog_asset_id")) for log in logs
+                     if log.log_metadata and log.log_metadata.get("catalog_asset_id")), None) or base.catalog_code
+    if asset_id:
+        asset = (await db.execute(select(CatalogAsset).where(CatalogAsset.catalog_code == asset_id))).scalars().first()
+        if asset:
+            asset_id = str(asset.id)
+
+    if not asset_id:
+        return [_to_response(base)]
+
+    publication_logs = (await db.execute(select(ActivityLog).where(
+        ActivityLog.action == "submission_published",
+    ))).scalars().all()
+    published_ids = [log.entity_id for log in publication_logs
+                     if log.entity_id and str((log.log_metadata or {}).get("catalog_asset_id")) == asset_id]
+    version_query = select(Submission).where(or_(Submission.catalog_code == asset_id, Submission.id.in_(published_ids)))
+    if role not in ("Aimplify.Admin", "Aimplify.Owner"):
+        version_query = version_query.where(Submission.submitter_id == user.id)
+    versions = (await db.execute(version_query.order_by(Submission.created_at.asc(), Submission.id.asc()))).scalars().all()
+    if all(version.id != base.id for version in versions):
+        versions.append(base)
+        versions.sort(key=lambda version: (version.created_at, str(version.id)))
+    return [_to_response(version, asset_id) for version in versions]
 
 
 @router.patch("/{submission_id}", response_model=SubmissionResponse)
@@ -354,6 +456,8 @@ async def update_submission(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot edit submission with status '{sub.status}'.")
 
     update_data = body.model_dump(exclude_unset=True)
+    from app.schemas.metadata_rules import validate_patch_pair
+    validate_patch_pair(sub, update_data)
     ideation_id = update_data.pop("aiv_ideation_id", None) or sub.aiv_ideation_id
     from app.services.aiv_ideation_service import require_approved_ideation
     if ideation_id:
@@ -380,8 +484,9 @@ async def update_submission(
         "submitter_role": user.role.value if hasattr(user.role, "value") else user.role,
         "submitter_email": user.email, "entity": "submission",
     }
+    from app.services.evaluation_jobs import enqueue_evaluation
+    await enqueue_evaluation(db, sub.id, "submission", user.id)
     await db.commit()
-    background_tasks.add_task(run_scoring_pipeline, str(sub.id), submission_data, "submission")
     return _to_response(sub)
 
 
@@ -392,7 +497,7 @@ async def rescore_submission(
     db: AsyncSession = Depends(get_db),
     user=require_role("Aimplify.Admin", "Aimplify.Owner"),
 ) -> SubmissionResponse:
-    """Admin/Owner: retry AI scoring for a submission that failed with score zero."""
+    """Admin/Owner: recover missing, failed, incomplete or stale AI evaluation."""
     from app.services.orchestrator import run_scoring_pipeline
 
     result = await db.execute(select(Submission).where(Submission.id == submission_id))
@@ -400,54 +505,12 @@ async def rescore_submission(
     if not sub:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
 
-    if sub.ai_score != 0:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="AI scoring can only be retried when the current score is 0.",
-        )
-
-    preserved_status = (
-        sub.status.value
-        if sub.status in (SubmissionStatus.Approved, SubmissionStatus.Published)
-        else None
-    )
-
-    sync_catalog_asset_id = None
-    if sub.status == SubmissionStatus.Published:
-        publication_result = await db.execute(
-            select(ActivityLog)
-            .where(
-                ActivityLog.action == "submission_published",
-                ActivityLog.entity_id == sub.id,
-            )
-            .order_by(ActivityLog.created_at.desc())
-        )
-        publication_log = publication_result.scalars().first()
-        if publication_log:
-            sync_catalog_asset_id = (publication_log.log_metadata or {}).get("catalog_asset_id")
-
-    if preserved_status is None:
-        sub.status = SubmissionStatus.Submitted
-    sub.ai_score = None
-    sub.ai_feedback = None
-    sub.updated_at = datetime.now(tz=timezone.utc)
-    db.add(ActivityLog(
-        actor_id=user.id,
-        action="ai_scoring_retried",
-        entity_type="submission",
-        entity_id=sub.id,
-    ))
+    from app.services.evaluation_jobs import enqueue_evaluation
+    job = await enqueue_evaluation(db, sub.id, 'submission', user.id)
+    db.add(ActivityLog(actor_id=user.id, action='ai_scoring_retried', entity_type='submission',
+                       entity_id=sub.id, log_metadata={'job_id': str(job.id)}))
     await db.commit()
 
-    background_tasks.add_task(
-        run_scoring_pipeline,
-        str(sub.id),
-        {
-            "preserve_status": preserved_status,
-            "sync_catalog_asset_id": sync_catalog_asset_id,
-        },
-        "submission",
-    )
     logger.info("Admin %s triggered rescore for submission %s", user.email, submission_id)
     return _to_response(sub)
 
@@ -455,6 +518,7 @@ async def rescore_submission(
 @router.post("/{submission_id}/publish", response_model=SubmissionResponse)
 async def publish_submission(
     submission_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user=require_role("Aimplify.Owner"),
 ) -> SubmissionResponse:
@@ -591,6 +655,8 @@ async def publish_submission(
         db.add(asset)
 
     await db.flush()
+    from app.services.artifact_migration import queue_artifact_finalization
+    await queue_artifact_finalization(db, asset, user.id)
     sub.catalog_code = str(asset.id)
     sub.status = SubmissionStatus.Published
     db.add(ActivityLog(
@@ -601,6 +667,8 @@ async def publish_submission(
         log_metadata={"catalog_asset_id": str(asset.id)},
     ))
     await db.commit()
+    from app.services.knowledge.ingestion_service import reindex_catalog_asset_by_id
+    background_tasks.add_task(reindex_catalog_asset_by_id, str(asset.id))
     await db.refresh(sub)
 
     catalog_url = f"{get_settings().frontend_url}/catalog"
@@ -668,3 +736,11 @@ async def delete_submission(
     db.add(ActivityLog(actor_id=user.id, action="submission_deleted", entity_type="submission", entity_id=sub.id))
     await db.delete(sub)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/{submission_id}/family")
+async def update_review_family(submission_id: UUID, body: FamilyUpdate, db: AsyncSession = Depends(get_db),
+                               user=require_role("Aimplify.Admin", "Aimplify.Owner")):
+    submission = await change_family(db, submission_id, body.family, user.id)
+    await db.commit()
+    return {"id":str(submission.id), "family":submission.family}

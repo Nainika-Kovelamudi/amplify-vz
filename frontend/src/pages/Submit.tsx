@@ -1,3 +1,5 @@
+import { FamilyEditor } from '../components/admin/FamilyEditor';
+import { apiErrorMessage } from '../lib/apiError';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -11,7 +13,7 @@ import { DemoVideoDropzone } from '../components/media/DemoVideoDropzone';
 import { Button } from '../components/ui/Button';
 import { getSubmission, createSubmission, updateSubmission, getApprovedIdeations } from '../lib/submissionService';
 import type { ApprovedIdeation } from '../lib/submissionService';
-import { getCatalogAsset } from '../lib/catalogService';
+import { getCatalogAsset, updateCatalogAsset } from '../lib/catalogService';
 import { uploadMedia } from '../lib/mediaService';
 import { useAuth } from '../context/AuthContext';
 import { usePortalSettings } from '../context/PortalSettingsContext';
@@ -44,6 +46,8 @@ const CATEGORIES = [
   // Others
   'Others',
 ] as const;
+
+const normalizeClouds = (value: string) => [...new Set(value.split(',').map(v => { const token = v.trim(); return ({'on-prem':'On-Premise','on-premise':'On-Premise','multi-cloud':'Multi-Cloud'} as Record<string,string>)[token.toLowerCase()] || token; }).filter(Boolean))];
 
 const maturityOptions = ['Experimental', 'Battle-Tested', 'Production'];
 
@@ -318,6 +322,9 @@ export function Submit() {
   const revisionId  = searchParams.get('revision');
   const catalogEditId = searchParams.get('catalogEdit');
   const isExistingAssetEdit = !!revisionId || !!catalogEditId;
+  const isAdminCatalogEdit = !!catalogEditId && (user?.role === 'Aimplify.Admin' || user?.role === 'Aimplify.Owner');
+  const initialCatalogForm = useRef<typeof emptyFormData | null>(null);
+  const initialCatalogDocs = useRef('');
   const [submittedId, setSubmittedId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
@@ -360,6 +367,8 @@ export function Submit() {
     technical_delivery:   { url: '', name: '' },
   });
   const [docUploading, setDocUploading] = useState<Partial<Record<DocSlotKey, boolean>>>({});
+  const [miscFiles, setMiscFiles] = useState<{ url: string; name: string }[]>([]);
+  const [miscUploading, setMiscUploading] = useState(false);
 
   // ── Draft persistence ────────────────────────────────────────────────────────
   const draftKey = user?.id ? `amplify_draft_${user.id}` : null;
@@ -373,12 +382,12 @@ export function Submit() {
 
   const saveDraft = useCallback(() => {
     if (!draftKey || revisionId || catalogEditId) return;
-    const draft = { formData, docFiles, savedAt: new Date().toISOString() };
+    const draft = { formData, docFiles, miscFiles, savedAt: new Date().toISOString() };
     localStorage.setItem(draftKey, JSON.stringify(draft));
     setDraftSavedAt(new Date().toLocaleTimeString());
     setDraftBanner('saved');
     setTimeout(() => setDraftBanner(b => b === 'saved' ? null : b), 3000);
-  }, [draftKey, formData, docFiles, revisionId, catalogEditId]);
+  }, [draftKey, formData, docFiles, miscFiles, revisionId, catalogEditId]);
 
   const clearDraft = useCallback(() => {
     if (draftKey) localStorage.removeItem(draftKey);
@@ -393,12 +402,12 @@ export function Submit() {
     if (!userTouchedRef.current) return;
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
     draftSaveTimer.current = setTimeout(() => {
-      const draft = { formData, docFiles, savedAt: new Date().toISOString() };
+      const draft = { formData, docFiles, miscFiles, savedAt: new Date().toISOString() };
       localStorage.setItem(draftKey, JSON.stringify(draft));
       setDraftSavedAt(new Date().toLocaleTimeString());
     }, 2000);
     return () => { if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current); };
-  }, [formData, docFiles, draftKey, revisionId, catalogEditId]);
+  }, [formData, docFiles, miscFiles, draftKey, revisionId, catalogEditId]);
 
   // On mount (once draftKey is known): check for an existing draft
   const draftCheckedRef = useRef(false);
@@ -426,6 +435,7 @@ export function Submit() {
       restoringRef.current = true;
       if (saved?.formData) setFormData({ ...emptyFormData, ...saved.formData });
       if (saved?.docFiles) setDocFiles(saved.docFiles);
+      if (Array.isArray(saved?.miscFiles)) setMiscFiles(saved.miscFiles);
       if (saved?.savedAt) setDraftSavedAt(new Date(saved.savedAt).toLocaleString());
       setDraftBanner(null);
       // Allow auto-save from user changes after restore
@@ -499,7 +509,7 @@ export function Submit() {
     let cancelled = false;
     getCatalogAsset(catalogEditId).then((asset) => {
       if (cancelled) return;
-      setFormData((c) => ({
+      setFormData((c) => { const loaded = {
         ...emptyFormData,
         owner_name:    asset.owner_name ?? c.owner_name,
         owner_email:   asset.owner_email ?? c.owner_email,
@@ -511,7 +521,7 @@ export function Submit() {
         aiv_ideation_id: asset.aiv_ideation_id ?? '',
         category:        asset.category ?? '',
         family:          asset.family ?? '',
-        cloud_providers: (asset.cloud_provider ?? '').split(', ').filter(Boolean),
+        cloud_providers: normalizeClouds(asset.cloud_provider ?? ''),
         maturity:        asset.maturity ?? 'Experimental',
         demo_ready:      asset.demo_ready ?? false,
         tech_stack:      asset.tech_stack ?? [],
@@ -524,7 +534,11 @@ export function Submit() {
         collaborators: asset.collaborators ?? [],
         dependencies:  asset.dependencies ?? '',
         commands:      asset.commands ?? [],
-      }));
+      }; initialCatalogForm.current = loaded; return loaded; });
+      let originalDocs: Record<string,unknown> = {};
+      try { const raw=asset.architecture_file_url || ''; const parsed=JSON.parse(raw); if(parsed && typeof parsed==='object' && !Array.isArray(parsed)) originalDocs=parsed; else if(raw) originalDocs={overall_architecture:raw}; }
+      catch { if(asset.architecture_file_url) originalDocs={overall_architecture:asset.architecture_file_url}; }
+      initialCatalogDocs.current=JSON.stringify({overall_architecture:originalDocs.overall_architecture||'',sales_pitch:originalDocs.sales_pitch||'',marketing_collateral:originalDocs.marketing_collateral||'',technical_delivery:originalDocs.technical_delivery||'',miscellaneous:Array.isArray(originalDocs.miscellaneous)?originalDocs.miscellaneous:[]});
       // Parse architecture_file_url (JSON with 4 slots, or legacy single URL)
       try {
         const raw = asset.architecture_file_url ?? '';
@@ -537,6 +551,7 @@ export function Submit() {
             marketing_collateral: { url: parsed.marketing_collateral ?? '', name: parsed.marketing_collateral ? 'uploaded' : '' },
             technical_delivery:   { url: parsed.technical_delivery ?? '',   name: parsed.technical_delivery ? 'uploaded' : '' },
           });
+          setMiscFiles(Array.isArray(parsed.miscellaneous) ? parsed.miscellaneous.filter((item: any) => item && typeof item.url === 'string').map((item: any) => ({ url: item.url, name: typeof item.name === 'string' ? item.name : 'Document' })) : []);
         } else if (raw) {
           // Legacy single URL — treat as overall_architecture
           setDocFiles(prev => ({ ...prev, overall_architecture: { url: raw, name: 'uploaded' } }));
@@ -573,7 +588,7 @@ export function Submit() {
         aiv_ideation_id: sub.aiv_ideation_id ?? '',
         category: (sub as any).category ?? '',
         family: sub.family,
-        cloud_providers: ((sub.cloud_provider ?? '').split(', ').filter(Boolean)),
+        cloud_providers: normalizeClouds(sub.cloud_provider ?? ''),
         maturity: sub.maturity ?? 'Experimental',
         demo_ready: sub.demo_ready,
         tech_stack: sub.tech_stack ?? [],
@@ -598,6 +613,7 @@ export function Submit() {
             marketing_collateral: { url: parsed.marketing_collateral ?? '', name: parsed.marketing_collateral ? 'uploaded' : '' },
             technical_delivery:   { url: parsed.technical_delivery ?? '',   name: parsed.technical_delivery ? 'uploaded' : '' },
           });
+          setMiscFiles(Array.isArray(parsed.miscellaneous) ? parsed.miscellaneous.filter((item: any) => item && typeof item.url === 'string').map((item: any) => ({ url: item.url, name: typeof item.name === 'string' ? item.name : 'Document' })) : []);
         } else if (raw) {
           setDocFiles(prev => ({ ...prev, overall_architecture: { url: raw, name: 'uploaded' } }));
         }
@@ -641,12 +657,26 @@ export function Submit() {
           sales_pitch:           docFiles.sales_pitch.url,
           marketing_collateral:  docFiles.marketing_collateral.url,
           technical_delivery:    docFiles.technical_delivery.url,
+          miscellaneous:       miscFiles,
         }),
         collaborators: formData.collaborators.length ? formData.collaborators : undefined,
         dependencies: formData.dependencies.trim() || undefined,
         commands: formData.commands.length ? formData.commands : undefined,
       };
-      if (catalogEditId) {
+      if (catalogEditId && isAdminCatalogEdit && initialCatalogForm.current) {
+        const initial=initialCatalogForm.current as Record<string,unknown>;
+        const current=formData as Record<string,unknown>;
+        const changes: Record<string,unknown> = {};
+        for(const [key,value] of Object.entries(payload)) {
+          if(key==='architecture_file_url') { if(value!==initialCatalogDocs.current) changes[key]=value; }
+          else {
+            const formKey=key==='cloud_provider'?'cloud_providers':key;
+            if(JSON.stringify(current[formKey])!==JSON.stringify(initial[formKey])) changes[key]=value??null;
+          }
+        }
+        const updated=await updateCatalogAsset(catalogEditId,changes);
+        clearDraft();navigate('/catalog/'+updated.slug);
+      } else if (catalogEditId) {
         // Re-submit as a new submission linked to the existing asset — triggers AI + approval workflow
         const created = await createSubmission({ ...payload, catalog_asset_id: catalogEditId } as any);
         clearDraft();
@@ -661,7 +691,7 @@ export function Submit() {
         setSubmittedId(created.id);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Submission failed.');
+      setError(apiErrorMessage(err, 'Submission failed.'));
     } finally {
       setIsSaving(false);
     }
@@ -707,11 +737,30 @@ export function Submit() {
       const entityId = catalogEditId || revisionId || undefined;
       const result = await uploadMedia(file, 'document', undefined, entityId, formData.family || undefined);
       setDocFiles((prev) => ({ ...prev, [key]: { url: result.url, name: file.name } }));
-    } catch {
-      setError(`Upload failed for "${DOC_SLOTS.find(s => s.key === key)?.label}". Check file type.`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Upload failed.';
+      setError(`Upload failed for "${DOC_SLOTS.find(s => s.key === key)?.label}": ${detail}`);
     } finally {
       setDocUploading((prev) => ({ ...prev, [key]: false }));
     }
+  };
+
+  const handleMiscUpload = async (files: File[]) => {
+    if (!files.length) return;
+    userTouchedRef.current = true;
+    setMiscUploading(true);
+    const entityId = catalogEditId || revisionId || undefined;
+    const results = await Promise.allSettled(files.map(async (file) => {
+      const result = await uploadMedia(file, 'document', undefined, entityId, formData.family || undefined);
+      return { url: result.url, name: file.name };
+    }));
+    const uploaded = results.filter((result): result is PromiseFulfilledResult<{ url: string; name: string }> => result.status === 'fulfilled').map(result => result.value);
+    if (uploaded.length) setMiscFiles(prev => [...prev, ...uploaded]);
+    const failures = results.flatMap((result, index) => result.status === 'rejected'
+      ? [`${files[index].name}: ${result.reason instanceof Error ? result.reason.message : 'Upload failed.'}`]
+      : []);
+    if (failures.length) setError(`${failures.length} miscellaneous file(s) could not be uploaded. ${failures.join(' ')}`);
+    setMiscUploading(false);
   };
 
   // Shared: apply parsed key→value map to form state
@@ -909,7 +958,7 @@ export function Submit() {
     return null;
   })();
 
-  const isFormValid = (
+  const isFormValid = isAdminCatalogEdit ? Boolean(initialCatalogForm.current && formData.family.trim() && formData.title.trim()) : (
     formData.owner_name.trim().length > 0 &&
     formData.owner_email.trim().length > 0 &&
     formData.manager_name.trim().length > 0 &&
@@ -1055,7 +1104,14 @@ export function Submit() {
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} noValidate className="space-y-8 p-6 md:p-8">
+          {catalogEditId && (user?.role === 'Aimplify.Admin' || user?.role === 'Aimplify.Owner') && (
+        <div className="mx-auto mb-6 max-w-5xl px-4">
+          <h2 className="mb-2 text-sm font-bold">Change platform family only</h2>
+          <FamilyEditor id={catalogEditId} kind="catalog" currentFamily={formData.family}
+            onSaved={(_family,slug) => navigate('/catalog/' + (slug || catalogEditId))} />
+        </div>
+      )}
+      <form onSubmit={handleSubmit} noValidate className="space-y-8 p-6 md:p-8">
             {revisionId && adminNotes && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
                 <div className="text-sm font-bold text-amber-700">Reviewer notes</div>
@@ -1246,7 +1302,7 @@ export function Submit() {
 
                 <Field label="Cloud Provider" wide>
                   <div className="flex flex-wrap gap-3 pt-1">
-                    {['AWS', 'Azure', 'GCP', 'Multi-cloud', 'On-prem'].map((cp) => {
+                    {['AWS', 'Azure', 'GCP', 'Multi-Cloud', 'On-Premise', 'Hybrid'].map((cp) => {
                       const checked = formData.cloud_providers.includes(cp);
                       return (
                         <label key={cp} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${checked ? 'border-sky-400 bg-sky-50 text-sky-700' : 'border-gray-200 bg-white text-gray-600 hover:border-sky-200 hover:bg-sky-50/40'}`}>
@@ -1470,7 +1526,7 @@ export function Submit() {
                             : <><Upload className="h-4 w-4 text-gray-400" /><span className="text-gray-500 font-medium">Upload from portal</span></>}
                           <input
                             type="file"
-                            accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg,.svg"
+                            accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg,.svg,.html,.htm,.js"
                             className="hidden"
                             disabled={isUploading}
                             onChange={(e) => {
@@ -1484,6 +1540,25 @@ export function Submit() {
                     </div>
                   );
                 })}
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-gray-800"><Paperclip className="h-4 w-4" />Miscellaneous Collateral</p>
+                  <p className="mt-1 text-xs text-gray-400">Upload multiple other project documents, including HTML and JS files (up to 50 MB each).</p>
+                  {miscFiles.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {miscFiles.map((file, index) => (
+                        <div key={file.url} className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                          <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                          <button type="button" aria-label={`Remove ${file.name}`} onClick={() => { userTouchedRef.current = true; setMiscFiles(prev => prev.filter((_, i) => i !== index)); }} className="text-gray-500 hover:text-rose-500"><X className="h-4 w-4" /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-200 px-4 py-3 text-sm hover:border-sky-300 hover:bg-sky-50/40">
+                    {miscUploading ? <><Loader2 className="h-4 w-4 animate-spin" />Uploading…</> : <><Upload className="h-4 w-4" />Add files</>}
+                    <input type="file" multiple accept=".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg,.svg,.html,.htm,.js" className="hidden" disabled={miscUploading} onChange={(e) => { const files = Array.from(e.target.files ?? []); void handleMiscUpload(files); e.target.value = ''; }} />
+                  </label>
+                </div>
               </div>
             </Section>
 
@@ -1492,7 +1567,7 @@ export function Submit() {
             )}
 
             <div className="pt-2 flex flex-wrap items-center gap-3">
-              <Button type="submit" size="lg" disabled={!isFormValid || isSaving} className="px-10">
+              <Button type="submit" size="lg" disabled={!isFormValid || isSaving || miscUploading || Object.values(docUploading).some(Boolean)} className="px-10">
                 {isSaving
                   ? (catalogEditId ? 'Saving…' : revisionId ? 'Resubmitting…' : 'Submitting…')
                   : (catalogEditId ? 'Save Changes' : revisionId ? 'Resubmit for AI Review' : 'Submit for Review')}

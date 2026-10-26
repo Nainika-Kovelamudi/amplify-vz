@@ -16,11 +16,8 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSON, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-
-class Base(DeclarativeBase):
-    pass
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.db.base import Base
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +378,7 @@ class ActivityLog(Base):
 
 
 class SubmissionComment(Base):
-    """Threaded conversation on a submission — visible only to submitter + admins/owners."""
+    """Submission conversation scoped to either the submitter or the reviewer group."""
 
     __tablename__ = "submission_comments"
 
@@ -393,6 +390,7 @@ class SubmissionComment(Base):
         UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False, default="submitter", server_default="submitter")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -443,14 +441,48 @@ class Notification(Base):
         return f"<Notification id={self.id} recipient_id={self.recipient_id} event_type={self.event_type!r}>"
 
 
+class PlatformFeedback(Base):
+    __tablename__ = "platform_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    submitter_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    comment: Mapped[str] = mapped_column(Text, nullable=False)
+    asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("catalog_assets.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    asset_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class DemoRequestBatch(Base):
+    """One customer request containing independently reviewed asset requests."""
+    __tablename__ = "demo_request_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    requester_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False, index=True)
+    customer_name: Mapped[str] = mapped_column(String, nullable=False)
+    project_name: Mapped[str] = mapped_column(String, nullable=False)
+    vertical: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class DemoRequest(Base):
     """Customer demo request raised by any user for a published catalog asset."""
 
     __tablename__ = "demo_requests"
+    request_type: Mapped[str] = mapped_column(String(20), nullable=False, default="asset", server_default="asset")
+
+    batch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("demo_request_batches.id"), nullable=True, index=True
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    asset_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("catalog_assets.id"), nullable=False, index=True
+    asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("catalog_assets.id"), nullable=True, index=True
     )
     requester_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False, index=True
@@ -471,7 +503,7 @@ class DemoRequest(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    asset: Mapped["CatalogAsset"] = relationship(
+    asset: Mapped[Optional["CatalogAsset"]] = relationship(
         "CatalogAsset", back_populates="demo_requests", foreign_keys=[asset_id]
     )
     requester: Mapped["UserProfile"] = relationship(
@@ -480,3 +512,6 @@ class DemoRequest(Base):
 
     def __repr__(self) -> str:
         return f"<DemoRequest id={self.id} asset_id={self.asset_id} customer={self.customer_name!r}>"
+
+# Register operational tables with Alembic metadata.
+from app.db.operations_models import EvaluationJob, RemediationItem

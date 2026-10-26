@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from app.services.blob_service import refresh_sas_url
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
@@ -33,7 +34,7 @@ def _to_response(s: Submission) -> SubmissionResponse:
         maturity=s.maturity,
         demo_ready=s.demo_ready,
         repo_url=s.repo_url,
-        video_url=s.video_url,
+        video_url=refresh_sas_url(s.video_url),
         demo_url=s.demo_url,
         status=s.status.value if hasattr(s.status, "value") else s.status,
         ai_score=s.ai_score,

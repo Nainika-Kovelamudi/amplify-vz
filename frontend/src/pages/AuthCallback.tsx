@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { msalInstance } from '../lib/msalConfig';
 import { handleRedirectResult } from '../lib/authService';
 import { authStore } from '../store/authStore';
 
@@ -12,21 +11,6 @@ export function AuthCallback() {
 
     async function complete() {
       try {
-        await msalInstance.initialize();
-
-        // Only clear interaction.status if it is stuck at "interaction_in_progress"
-        // (stale lock from an interrupted flow). Do NOT remove it if the value is
-        // "redirect" — MSAL sets that itself and needs it to process the callback.
-        Object.keys(sessionStorage)
-          .filter(k => k.includes('interaction.status'))
-          .forEach(k => {
-            const val = sessionStorage.getItem(k);
-            if (val === 'interaction_in_progress') {
-              console.warn('[AuthCallback] Clearing stale MSAL lock:', k);
-              sessionStorage.removeItem(k);
-            }
-          });
-
         console.log('[AuthCallback] Calling handleRedirectPromise...');
         await handleRedirectResult();
         console.log('[AuthCallback] handleRedirectResult complete, auth state:',

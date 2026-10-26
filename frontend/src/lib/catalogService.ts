@@ -1,4 +1,5 @@
 import { apiClient } from './apiClient';
+import { authStore } from '../store/authStore';
 
 export interface CatalogAsset {
   aiv_ideation_id: string | null;
@@ -78,13 +79,31 @@ export interface CatalogFilters {
   limit?: number;
 }
 
+const catalogCache = new Map<string, { expiresAt: number; data: CatalogListResponse }>();
+const catalogRequests = new Map<string, Promise<CatalogListResponse>>();
+
+export function invalidateCatalogCache(): void {
+  catalogCache.clear();
+}
+
 export async function getCatalog(filters: CatalogFilters = {}): Promise<CatalogListResponse> {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') params.set(k, String(v));
   });
-  const { data } = await apiClient.get<CatalogListResponse>(`/catalog?${params}`, { timeout: 90_000 });
-  return data;
+  const key = `${authStore.getState().user?.id ?? 'guest'}:${params.toString()}`;
+  const cached = catalogCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const pending = catalogRequests.get(key);
+  if (pending) return pending;
+  const request = apiClient.get<CatalogListResponse>(`/catalog?${params}`, { timeout: 30_000 })
+    .then(({ data }) => {
+      catalogCache.set(key, { data, expiresAt: Date.now() + 20_000 });
+      return data;
+    })
+    .finally(() => { catalogRequests.delete(key); });
+  catalogRequests.set(key, request);
+  return request;
 }
 
 export async function getCatalogAsset(slug: string): Promise<CatalogAsset> {
@@ -99,20 +118,24 @@ export async function getPlatformFamilies(): Promise<PlatformFamily[]> {
 
 export async function createCatalogAsset(payload: Partial<CatalogAsset>): Promise<CatalogAsset> {
   const { data } = await apiClient.post<CatalogAsset>('/catalog', payload);
+  invalidateCatalogCache();
   return data;
 }
 
 export async function updateCatalogAsset(id: string, payload: Partial<CatalogAsset>): Promise<CatalogAsset> {
   const { data } = await apiClient.patch<CatalogAsset>(`/catalog/${id}`, payload);
+  invalidateCatalogCache();
   return data;
 }
 
 export async function deleteCatalogAsset(id: string): Promise<void> {
   await apiClient.delete(`/catalog/${id}`);
+  invalidateCatalogCache();
 }
 
 export async function toggleAssetLike(assetId: string): Promise<{ like_count: number; liked_by_me: boolean }> {
   const { data } = await apiClient.post(`/catalog/${assetId}/like`);
+  invalidateCatalogCache();
   return data;
 }
 

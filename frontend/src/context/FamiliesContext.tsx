@@ -46,7 +46,7 @@ function toFamilyUi(f: PlatformFamily): FamilyUi {
 }
 
 // Hardcoded fallback so the dropdown always works even when the API is unreachable
-const FALLBACK_FAMILIES: Record<string, FamilyUi> = {
+export const FALLBACK_FAMILIES: Record<string, FamilyUi> = {
   Forge:    { name: 'Forge', tagline: 'AI Engineering & Development', color: '#F05A0A', bg: '#F05A0A14', summary: 'Forge builds, engineers and operationalizes AI solutions from idea to production.', longDesc: 'FORGE is the AI engineering and development family within AIMPLIFY, enabling organizations to design, build, test, deploy and continuously improve AI-powered solutions. It provides the engineering capabilities required across the AI Software Development Lifecycle, from experimentation and prototyping through production deployment and evolution.', keyAssets: ['AI Engineering', 'AI Development', 'AI SDLC', 'GenAI', 'Agentic AI', 'AI Applications'], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
   Atlas:    { name: 'Atlas', tagline: 'AI Foundation & Platform', color: '#147FE6', bg: '#147FE614', summary: 'ATLAS provides the data, models, knowledge, platform and infrastructure that power enterprise AI.', longDesc: 'ATLAS is the foundational layer of AIMPLIFY, providing the technology ecosystem required to build and operate enterprise AI at scale. It brings together AI infrastructure, data, models, knowledge, compute, platforms and reusable services into a scalable and composable AI foundation.', keyAssets: ['AI Foundation', 'Data', 'Models', 'Knowledge', 'Platform', 'Infrastructure'], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
   Sentinel: { name: 'Sentinel', tagline: 'AI Security, Risk & Governance', color: '#07885C', bg: '#07885C14', summary: 'SENTINEL secures, governs, monitors and assures AI across its entire lifecycle.', longDesc: "SENTINEL is AIMPLIFY's AI Trust, Security and Governance family, designed to protect AI systems from emerging threats while ensuring responsible, compliant and controlled AI adoption. It provides continuous security, risk management, governance, guardrails and observability across models, agents, applications and AI workflows.", keyAssets: ['AI Security', 'Red Team', 'Guardrails', 'Observability', 'Risk', 'Compliance', 'Governance'], useCases: [], dependsOn: [], enables: [], solutions: [], asset_count: 0 },
@@ -61,7 +61,9 @@ export function FamiliesProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    const loadFamilies = () => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const loadFamilies = (retryCount = 0) => {
       setLoading(true);
       void getPlatformFamilies().then((list) => {
         if (cancelled) return;
@@ -74,15 +76,20 @@ export function FamiliesProvider({ children }: { children: ReactNode }) {
       })
       .catch((err) => {
         console.error('[FamiliesContext] Failed to load platform families:', err);
-        // keep FALLBACK_FAMILIES — dropdown still works offline
+        // Retry up to 3 times with backoff so a cold-start or brief network hiccup
+        // doesn't leave all family cards showing 0 assets permanently.
+        if (!cancelled && retryCount < 3) {
+          retryTimer = setTimeout(() => loadFamilies(retryCount + 1), 2000 * (retryCount + 1));
+        }
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     };
     loadFamilies();
-    window.addEventListener('portal-settings-updated', loadFamilies);
+    window.addEventListener('portal-settings-updated', () => loadFamilies());
     return () => {
       cancelled = true;
-      window.removeEventListener('portal-settings-updated', loadFamilies);
+      if (retryTimer) clearTimeout(retryTimer);
+      window.removeEventListener('portal-settings-updated', () => loadFamilies());
     };
   }, [isAuthenticated]);
 

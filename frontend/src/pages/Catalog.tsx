@@ -24,6 +24,8 @@ export function Catalog() {
   const query = searchParams.get('q') || '';
   const [assets, setAssets] = useState<CatalogAsset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [familyFilter, setFamilyFilter] = useState('all');
   const [cloudFilter, setCloudFilter] = useState('');
   const [maturityFilter, setMaturityFilter] = useState(() => searchParams.get('maturity') || '');
@@ -33,11 +35,15 @@ export function Catalog() {
 
   useEffect(() => {
     let cancelled = false;
+    setIsLoading(true);
+    setLoadError(false);
     getCatalog({ limit: 500 }).then(({ items }) => {
       if (!cancelled) { setAssets(items); setIsLoading(false); }
+    }).catch(() => {
+      if (!cancelled) { setLoadError(true); setIsLoading(false); }
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [reloadKey]);
 
   const toggleCloud = (cloud: string) => setCloudFilter((current) => current === cloud ? '' : cloud);
   const toggleMaturity = (maturity: string) => setMaturityFilter((current) => current === maturity ? '' : maturity);
@@ -163,7 +169,7 @@ export function Catalog() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 px-4 py-8 md:px-10">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">{banners.catalog.title}</h1>
-          <p className="mt-1 text-sm text-gray-500">{banners.catalog.subtitle} {!isLoading && `· ${filteredAssets.length} of ${assets.length} assets`}</p>
+          <p className="mt-1 text-sm text-gray-500">{banners.catalog.subtitle} {!isLoading && !loadError && `· ${filteredAssets.length} of ${assets.length} assets`}</p>
         </div>
         <div className="flex items-center gap-3">
           {canDownload && (
@@ -212,6 +218,10 @@ export function Catalog() {
       <div className="px-4 md:px-10">
         {isLoading ? (
           <div className="rounded-xl border border-gray-200 bg-white py-16 text-center text-sm font-medium text-gray-500 shadow-sm">Loading catalog assets...</div>
+        ) : loadError ? (
+          <div className="flex min-h-40 items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-10">
+            <Button variant="outline" onClick={() => setReloadKey(key => key + 1)}>Retry</Button>
+          </div>
         ) : filteredAssets.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white py-24 text-center">
             <SearchX className="mb-4 h-12 w-12 text-gray-300" />

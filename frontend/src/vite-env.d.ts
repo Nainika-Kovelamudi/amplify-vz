@@ -3,6 +3,7 @@
 interface ImportMetaEnv {
   // ── Amplify FastAPI backend ──────────────────────────────────────────────
   readonly VITE_API_URL: string;
+  readonly VITE_ASSET_OPERATIONS_ENABLED?: string;
 
   // ── Microsoft Entra ID (MSAL) ────────────────────────────────────────────
   readonly VITE_AZURE_TENANT_ID: string;

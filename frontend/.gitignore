@@ -49,3 +49,5 @@ yarn-error.log*
 
 # TypeScript cache
 *.tsbuildinfo
+ci_artifacts/
+backend-release/

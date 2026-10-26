@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.db.models import ActivityLog, Submission, SubmissionComment, UserProfile, UserRole
 from app.deps.rbac import require_role
-from app.schemas.comment import CommentCreate, CommentResponse
+from app.schemas.comment import CommentChannel, CommentCreate, CommentResponse
 from app.services.notification_service import push_notification
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,15 @@ def _can_access(submission: Submission, user: UserProfile) -> bool:
     return str(submission.submitter_id) == str(user.id)
 
 
+def _can_access_channel(submission: Submission, user: UserProfile, channel: CommentChannel) -> bool:
+    if not _can_access(submission, user):
+        return False
+    if channel == "internal":
+        role = user.role.value if hasattr(user.role, "value") else user.role
+        return role in ("Aimplify.Admin", "Aimplify.Owner")
+    return True
+
+
 def _to_response(comment: SubmissionComment, author: UserProfile) -> CommentResponse:
     return CommentResponse(
         id=comment.id,
@@ -33,6 +43,7 @@ def _to_response(comment: SubmissionComment, author: UserProfile) -> CommentResp
         author_name=author.display_name or author.email,
         author_email=author.email,
         body=comment.body,
+        channel=comment.channel,
         created_at=comment.created_at,
     )
 
@@ -40,6 +51,7 @@ def _to_response(comment: SubmissionComment, author: UserProfile) -> CommentResp
 @router.get("/submissions/{submission_id}/comments", response_model=list[CommentResponse])
 async def list_comments(
     submission_id: str,
+    channel: CommentChannel = Query("submitter"),
     db: AsyncSession = Depends(get_db),
     user=require_role("Aimplify.User", "Aimplify.Admin", "Aimplify.Owner"),
 ) -> list[CommentResponse]:
@@ -47,13 +59,13 @@ async def list_comments(
     sub = sub_result.scalars().first()
     if not sub:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
-    if not _can_access(sub, user):
+    if not _can_access_channel(sub, user, channel):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
 
     rows = (await db.execute(
         select(SubmissionComment, UserProfile)
         .join(UserProfile, UserProfile.id == SubmissionComment.author_id)
-        .where(SubmissionComment.submission_id == sub.id)
+        .where(SubmissionComment.submission_id == sub.id, SubmissionComment.channel == channel)
         .order_by(SubmissionComment.created_at.asc())
     )).all()
     return [_to_response(c, author) for c, author in rows]
@@ -70,13 +82,14 @@ async def add_comment(
     sub = sub_result.scalars().first()
     if not sub:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
-    if not _can_access(sub, user):
+    if not _can_access_channel(sub, user, body.channel):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
 
     comment = SubmissionComment(
         submission_id=sub.id,
         author_id=user.id,
         body=body.body,
+        channel=body.channel,
     )
     db.add(comment)
     db.add(ActivityLog(
@@ -84,6 +97,7 @@ async def add_comment(
         action="submission_comment_added",
         entity_type="submission",
         entity_id=sub.id,
+        log_metadata={"channel": body.channel},
     ))
     await db.flush()
     await db.refresh(comment)
@@ -101,13 +115,13 @@ async def _notify_comment(db: AsyncSession, sub: Submission, comment: Submission
         from app.config import get_settings
         settings = get_settings()
 
-        # The conversation audience is the submitter plus every Admin and Owner.
-        # Deduplicate users and never send a notification back to the author.
+        # Internal comments must never notify the submitter.
         recipients: dict[str, UserProfile] = {}
-        submitter_result = await db.execute(select(UserProfile).where(UserProfile.id == sub.submitter_id))
-        submitter = submitter_result.scalars().first()
-        if submitter:
-            recipients[str(submitter.id)] = submitter
+        if comment.channel == "submitter":
+            submitter_result = await db.execute(select(UserProfile).where(UserProfile.id == sub.submitter_id))
+            submitter = submitter_result.scalars().first()
+            if submitter:
+                recipients[str(submitter.id)] = submitter
 
         reviewers_result = await db.execute(
             select(UserProfile).where(UserProfile.role.in_([UserRole.admin, UserRole.owner]))
@@ -116,7 +130,7 @@ async def _notify_comment(db: AsyncSession, sub: Submission, comment: Submission
             recipients[str(reviewer.id)] = reviewer
         recipients.pop(str(author.id), None)
 
-        notification_title = f'New comment on "{sub.title}"'
+        notification_title = f'New {"internal " if comment.channel == "internal" else ""}comment on "{sub.title}"'
         notification_body = f'{author.display_name or author.email}: {comment.body}'
         for recipient in recipients.values():
             await push_notification(
@@ -128,12 +142,12 @@ async def _notify_comment(db: AsyncSession, sub: Submission, comment: Submission
                 str(sub.id),
             )
 
-        detail_url = f"{settings.frontend_url}/pipeline/{sub.id}"
+        detail_url = f"{settings.frontend_url}/pipeline/{sub.id}?tab=comments&channel={comment.channel}"
         body_html = f"""<p style="margin:0 0 16px;">
-          <strong>{author.display_name or author.email}</strong> left a comment on submission
-          <strong>"{sub.title}"</strong>.
+          <strong>{escape(author.display_name or author.email)}</strong> left a comment on submission
+          <strong>"{escape(sub.title)}"</strong>.
         </p>
-        {_meta_table(_meta_row("Comment", comment.body))}
+        {_meta_table(_meta_row("Comment", escape(comment.body)))}
         <p style="margin:16px 0 0;">
           <a href="{detail_url}"
              style="display:inline-block;background:#0EA5E9;color:#ffffff;

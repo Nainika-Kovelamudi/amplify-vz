@@ -1,3 +1,4 @@
+import { authStore } from '../store/authStore';
 import { apiClient } from './apiClient';
 import type { Submission, SubmissionListResponse } from './submissionService';
 
@@ -141,22 +142,22 @@ export async function assignSubmissionReview(id: string, email: string): Promise
 }
 
 export async function approveSubmission(id: string, notes?: string): Promise<Submission> {
-  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/approve`, notes ? { notes } : {});
+  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/approve`, notes ? { notes } : {}, { timeout: 90_000 });
   return data;
 }
 
 export async function rejectSubmission(id: string, notes: string): Promise<Submission> {
-  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/reject`, { notes });
+  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/reject`, { notes }, { timeout: 90_000 });
   return data;
 }
 
 export async function finalRejectSubmission(id: string, notes: string): Promise<Submission> {
-  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/final-reject`, { notes });
+  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/final-reject`, { notes }, { timeout: 90_000 });
   return data;
 }
 
 export async function holdSubmission(id: string, notes?: string): Promise<Submission> {
-  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/hold`, notes ? { notes } : {});
+  const { data } = await apiClient.patch<Submission>(`/admin/approvals/${id}/hold`, notes ? { notes } : {}, { timeout: 90_000 });
   return data;
 }
 
@@ -177,9 +178,17 @@ export async function getRecentActivity(): Promise<ActivityEvent[]> {
   return data;
 }
 
-export async function getExecutiveReport(days = 30): Promise<ExecutiveReport> {
-  const { data } = await apiClient.get<ExecutiveReport>('/admin/executive-report', { params: { days } });
-  return data;
+const executiveReportRequests = new Map<string, Promise<ExecutiveReport>>();
+
+export function getExecutiveReport(days = 30, refresh = false): Promise<ExecutiveReport> {
+  const key = `${authStore.getState().user?.id ?? 'guest'}:${days}:${refresh}`;
+  const pending = executiveReportRequests.get(key);
+  if (pending) return pending;
+  const request = apiClient.get<ExecutiveReport>('/admin/executive-report', { params: { days, refresh } })
+    .then(({ data }) => data)
+    .finally(() => executiveReportRequests.delete(key));
+  executiveReportRequests.set(key, request);
+  return request;
 }
 
 export type ExecutiveReportFormat = 'docx' | 'xlsx' | 'pdf';
@@ -229,8 +238,8 @@ export async function updateUserRole(userId: string, role: AppUser['role'], depa
   return data;
 }
 
-export async function deleteUser(userId: string): Promise<void> {
-  await apiClient.delete(`/admin/users/${userId}`);
+export async function deleteUser(userId: string, replacementOwnerId?: string): Promise<void> {
+  await apiClient.delete(`/admin/users/${userId}`, { params: { replacement_owner_id: replacementOwnerId || undefined } });
 }
 
 // ── Audit ────────────────────────────────────────────────────────────────────

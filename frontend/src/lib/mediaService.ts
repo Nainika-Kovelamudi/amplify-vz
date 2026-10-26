@@ -30,12 +30,12 @@ function putBlobPart(
       ? resolve()
       : reject(new Error(`Storage upload failed (${xhr.status}).`));
     xhr.onerror = () => reject(new Error('Direct storage upload failed. Check Blob CORS and network access.'));
-    xhr.ontimeout = () => reject(new Error('A video block timed out.'));
+    xhr.ontimeout = () => reject(new Error('A storage upload block timed out.'));
     xhr.send(body);
   });
 }
 
-async function uploadVideoInBlocks(file: File, uploadUrl: string, onProgress?: (percent: number) => void): Promise<void> {
+async function uploadBlobInBlocks(file: File, uploadUrl: string, onProgress?: (percent: number) => void): Promise<void> {
   // Larger blocks and four workers substantially reduce request overhead while
   // remaining conservative enough for corporate networks and large videos.
   const blockSize = file.size >= 512 * 1024 * 1024
@@ -66,7 +66,7 @@ async function uploadVideoInBlocks(file: File, uploadUrl: string, onProgress?: (
           lastError = null;
           break;
         } catch (error) {
-          lastError = error instanceof Error ? error : new Error('Video block upload failed.');
+          lastError = error instanceof Error ? error : new Error('Storage block upload failed.');
           if (attempt < 3) {
             await new Promise(resolve => window.setTimeout(resolve, 500 * (2 ** (attempt - 1))));
           }
@@ -82,7 +82,10 @@ async function uploadVideoInBlocks(file: File, uploadUrl: string, onProgress?: (
     blockList,
     'application/xml',
     undefined,
-    { 'x-ms-blob-content-type': file.type || 'video/mp4' },
+    {
+      'x-ms-blob-content-type': file.type || 'application/octet-stream',
+      ...(/\.(html?|js)$/i.test(file.name) ? { 'x-ms-blob-content-disposition': 'attachment' } : {}),
+    },
   );
   onProgress?.(100);
 }
@@ -104,15 +107,35 @@ export async function uploadMedia(
   const baseURL = (apiClient.defaults.baseURL as string) || '';
   const token = authStore.getState().accessToken;
   const isVideo = mediaType === 'video';
-  const timeout = isVideo ? 10 * 60 * 1000 : 60 * 1000;
+  const timeout = isVideo ? 10 * 60 * 1000 : mediaType === 'document' ? 3 * 60 * 1000 : 60 * 1000;
 
   if (isVideo) {
     if (file.size > 800 * 1024 * 1024) throw new Error('Video exceeds the 800 MB limit.');
     const { data: target } = await apiClient.post<DirectUploadResult>('/media/upload-url', null, {
       params: { filename: file.name, content_type: file.type || 'application/octet-stream', media_type: mediaType, entity_id: entityId, family },
     });
-    await uploadVideoInBlocks(file, target.upload_url, onProgress);
+    await uploadBlobInBlocks(file, target.upload_url, onProgress);
     return { url: target.url, blob_path: target.blob_path };
+  }
+
+  if (mediaType === 'document' && file.size > 50 * 1024 * 1024) {
+    throw new Error('Document exceeds the 50 MB limit.');
+  }
+
+  // Send documents directly to Blob Storage so even small files do not wait on
+  // App Service to receive and forward the full request body. Retain the
+  // existing endpoint as a fallback when direct upload is unavailable.
+  let directUploadError: Error | null = null;
+  if (mediaType === 'document') {
+    try {
+      const { data: target } = await apiClient.post<DirectUploadResult>('/media/upload-url', null, {
+        params: { filename: file.name, content_type: file.type || 'application/octet-stream', media_type: mediaType, entity_id: entityId, family },
+      });
+      await uploadBlobInBlocks(file, target.upload_url, onProgress);
+      return { url: target.url, blob_path: target.blob_path };
+    } catch (error) {
+      directUploadError = error instanceof Error ? error : new Error('Direct storage upload failed.');
+    }
   }
 
   return new Promise<UploadResult>((resolve, reject) => {
@@ -145,6 +168,9 @@ export async function uploadMedia(
     xhr.onerror = () => reject(new Error('Network error during upload'));
     xhr.ontimeout = () => reject(new Error('Upload timed out'));
     xhr.send(file);  // raw File object, not FormData
+  }).catch(error => {
+    const message = error instanceof Error ? error.message : 'Upload failed.';
+    throw new Error(directUploadError ? `${message} Direct storage attempt: ${directUploadError.message}` : message);
   });
 }
 
@@ -164,6 +190,31 @@ export function blobPathFromUrl(url: string): string | null {
     return u.pathname.slice(1);
   } catch {
     return null;
+  }
+}
+
+export async function downloadHtmlCollateral(url: string, filename: string): Promise<void> {
+  const blobPath = blobPathFromUrl(url);
+  if (!blobPath?.startsWith('artifacts/') || !/\.html?$/i.test(blobPath)) {
+    throw new Error('This HTML collateral link is invalid.');
+  }
+  try {
+    // Fetch the existing signed Blob URL, then download from a local object URL.
+    // This never navigates Chrome to an untrusted HTML document on the Blob host.
+    const response = await fetch(url, { mode: 'cors' });
+    if (!response.ok) throw new Error(`Blob returned HTTP ${response.status}`);
+    const blob = new Blob([await response.blob()], { type: 'application/octet-stream' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Direct HTML download failed (${reason}). Check Blob Storage CORS for GET requests from this portal.`);
   }
 }
 

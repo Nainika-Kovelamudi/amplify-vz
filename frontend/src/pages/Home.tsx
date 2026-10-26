@@ -12,12 +12,13 @@ import { defaultFamilyBadge, familyAction, useFamilies } from '../context/Famili
 import { useAuth } from '../context/AuthContext';
 import { getCatalog, type CatalogAsset } from '../lib/catalogService';
 import { getMySubmissions, type Submission } from '../lib/submissionService';
-import { getRecentActivity, type ActivityEvent } from '../lib/adminService';
 import { getAllCloneRequests, type CloneRequest } from '../lib/cloneService';
 import { getAllDemoRequests, type DemoRequest } from '../lib/demoRequestService';
 import { getPortalSettings, type PortalContent } from '../lib/portalSettingsService';
 import { usePortalSettings } from '../context/PortalSettingsContext';
 import { FamilyIcon } from '../components/families/FamilyIcon';
+import { Button } from '../components/ui/Button';
+import { PlatformRequests } from '../components/demo/PlatformRequests';
 
 function NeuralCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -301,13 +302,13 @@ export function Home() {
 
   const [assets, setAssets]           = useState<CatalogAsset[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [activity, setActivity]       = useState<ActivityEvent[]>([]);
   const [cloneRequests, setCloneRequests] = useState<CloneRequest[]>([]);
   const [demoRequests, setDemoRequests]   = useState<DemoRequest[]>([]);
   const [assetTab, setAssetTab]               = useState<'latest' | 'trending'>('trending');
   const [assetsLoading, setAssetsLoading]     = useState(true);
+  const [assetsError, setAssetsError]         = useState(false);
+  const [catalogRetry, setCatalogRetry]       = useState(0);
   const [subsLoading, setSubsLoading]         = useState(true);
-  const [activityLoading, setActivityLoading] = useState(true);
   const [cloneLoading, setCloneLoading]       = useState(true);
   const [demoLoading, setDemoLoading]         = useState(true);
   // Alternate banner implementations are retained below but intentionally disabled.
@@ -328,11 +329,13 @@ export function Home() {
   useEffect(() => {
     if (authLoading) return;
     let c = false;
+    setAssetsLoading(true);
+    setAssetsError(false);
     getCatalog({ limit: 500 })
       .then(({ items }) => { if (!c) { setAssets(items); setAssetsLoading(false); } })
-      .catch((err) => { console.error('[Home] Failed to load catalog:', err); if (!c) setAssetsLoading(false); });
+      .catch((err) => { console.error('[Home] Failed to load catalog:', err); if (!c) { setAssetsError(true); setAssetsLoading(false); } });
     return () => { c = true; };
-  }, [authLoading]);
+  }, [authLoading, catalogRetry]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -342,16 +345,6 @@ export function Home() {
       .catch((err) => { console.error('[Home] Failed to load submissions:', err); if (!c) setSubsLoading(false); });
     return () => { c = true; };
   }, [authLoading]);
-
-  useEffect(() => {
-    if (authLoading) return;
-    if (!isAdmin) { setActivityLoading(false); return; }
-    let c = false;
-    getRecentActivity()
-      .then((acts) => { if (!c) { setActivity(acts); setActivityLoading(false); } })
-      .catch((err) => { console.error('[Home] Failed to load activity:', err); if (!c) setActivityLoading(false); });
-    return () => { c = true; };
-  }, [authLoading, isAdmin]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -389,18 +382,32 @@ export function Home() {
   const battleTestedCount  = useMemo(() => assets.filter((a) => a.maturity === 'Battle-Tested').length, [assets]);
   const experimentalCount  = useMemo(() => assets.filter((a) => a.maturity === 'Experimental').length, [assets]);
 
+  // Compute asset counts per family from the locally-loaded catalog so family cards
+  // always show correct numbers even when the /catalog/families API is slow or returns stale data.
+  const familiesWithCounts = useMemo(() => {
+    if (assetsLoading) return families;
+    const countByFamily: Record<string, number> = {};
+    assets.forEach((a) => { countByFamily[a.family] = (countByFamily[a.family] ?? 0) + 1; });
+    const merged: typeof families = {};
+    Object.entries(families).forEach(([k, f]) => {
+      merged[k] = { ...f, asset_count: countByFamily[k] ?? f.asset_count };
+    });
+    return merged;
+  }, [families, assets, assetsLoading]);
+
   const STATS = [
-    { value: assetsLoading ? null : totalAssets,       label: 'Total Assets',  desc: 'Published in catalog',      icon: <Package     className="h-5 w-5" />, color: 'text-sky-600',    iconBg: 'bg-sky-50 text-sky-500',       accent: '#0EA5E9', path: '/catalog' },
-    { value: assetsLoading ? null : demoCount,         label: 'Demo-Ready',    desc: 'Live demos available',      icon: <PlayCircle    className="h-5 w-5" />, color: 'text-emerald-600',iconBg: 'bg-emerald-50 text-emerald-500',accent: '#10B981', path: '/catalog?demo=true' },
-    { value: assetsLoading ? null : productionCount,   label: 'Production',    desc: 'Production-ready assets',   icon: <Rocket        className="h-5 w-5" />, color: 'text-green-600',  iconBg: 'bg-green-50 text-green-500',   accent: '#16A34A', path: '/catalog?maturity=Production' },
-    { value: assetsLoading ? null : battleTestedCount, label: 'Battle-Tested', desc: 'Proven in real projects',   icon: <Activity      className="h-5 w-5" />, color: 'text-violet-600', iconBg: 'bg-violet-50 text-violet-500', accent: '#7C3AED', path: '/catalog?maturity=Battle-Tested' },
-    { value: assetsLoading ? null : experimentalCount, label: 'Experimental',  desc: 'Experimental-stage assets', icon: <FlaskConical  className="h-5 w-5" />, color: 'text-amber-600',  iconBg: 'bg-amber-50 text-amber-500',   accent: '#F59E0B', path: '/catalog?maturity=Experimental' },
+    { value: assetsLoading || assetsError ? null : totalAssets,       label: 'Total Assets',  desc: 'Published in catalog',      icon: <Package     className="h-5 w-5" />, color: 'text-sky-600',    iconBg: 'bg-sky-50 text-sky-500',       accent: '#0EA5E9', path: '/catalog' },
+    { value: assetsLoading || assetsError ? null : demoCount,         label: 'Demo-Ready',    desc: 'Live demos available',      icon: <PlayCircle    className="h-5 w-5" />, color: 'text-emerald-600',iconBg: 'bg-emerald-50 text-emerald-500',accent: '#10B981', path: '/catalog?demo=true' },
+    { value: assetsLoading || assetsError ? null : productionCount,   label: 'Production',    desc: 'Production-ready assets',   icon: <Rocket        className="h-5 w-5" />, color: 'text-green-600',  iconBg: 'bg-green-50 text-green-500',   accent: '#16A34A', path: '/catalog?maturity=Production' },
+    { value: assetsLoading || assetsError ? null : battleTestedCount, label: 'Battle-Tested', desc: 'Proven in real projects',   icon: <Activity      className="h-5 w-5" />, color: 'text-violet-600', iconBg: 'bg-violet-50 text-violet-500', accent: '#7C3AED', path: '/catalog?maturity=Battle-Tested' },
+    { value: assetsLoading || assetsError ? null : experimentalCount, label: 'Experimental',  desc: 'Experimental-stage assets', icon: <FlaskConical  className="h-5 w-5" />, color: 'text-amber-600',  iconBg: 'bg-amber-50 text-amber-500',   accent: '#F59E0B', path: '/catalog?maturity=Experimental' },
   ];
 
   return (
     <div className="min-h-screen bg-gray-50 animate-in fade-in duration-300 pb-16">
 
       {/* ── Hero Banner ─────────────────────────────────────────────────── */}
+      <section aria-label="AImplify banner" style={{ background: 'linear-gradient(120deg, #1a237e 0%, #3949ab 30%, #6a1b9a 65%, #c2185b 100%)' }}>
       {bannerVariant === 'current' ? (
       <div className="relative overflow-hidden" style={{ background: 'linear-gradient(120deg, #1a237e 0%, #3949ab 30%, #6a1b9a 65%, #c2185b 100%)', minHeight: 200 }}>
 
@@ -416,7 +423,7 @@ export function Home() {
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
 
             {/* Left */}
-            <div className="max-w-xl">
+            <div className="min-w-0 flex-1 lg:max-w-xl">
               {/* Label */}
               <motion.p initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}
                 className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-white/60">
@@ -446,7 +453,7 @@ export function Home() {
 
             {/* Right — QR code + CTA buttons */}
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.6, delay: 0.4 }}
-              className="flex shrink-0 flex-col items-center gap-3 -mt-2">
+              className="-mt-2 flex w-full min-w-0 max-w-full flex-col items-end gap-3 lg:w-[36rem] lg:max-w-[55%] lg:shrink-0">
 
               {/* QR Code card */}
               <div style={{ background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.22)', borderRadius: 10, padding: '8px 10px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
@@ -463,8 +470,8 @@ export function Home() {
                 </p>
               </div>
 
-              {/* Buttons side by side below QR */}
-              <div className="flex items-center gap-2">
+              {/* Center the primary actions over the request and feedback buttons. */}
+              <div className="flex w-full flex-wrap items-center justify-center gap-2">
                 <button onClick={() => navigate('/catalog')}
                   className="flex items-center justify-center gap-2 rounded-lg border border-white bg-transparent px-4 py-2 text-xs font-semibold text-white hover:bg-white/10 transition-colors whitespace-nowrap">
                   <LayoutGrid className="h-3.5 w-3.5 shrink-0" /> Browse Catalog
@@ -474,6 +481,7 @@ export function Home() {
                   <FileText className="h-3.5 w-3.5 shrink-0" /> Submit Asset
                 </button>
               </div>
+              <PlatformRequests variant="banner" assets={assets} loading={assetsLoading} onSubmitted={() => setCatalogRetry(value => value + 1)} />
 
             </motion.div>
 
@@ -501,6 +509,7 @@ export function Home() {
               <div className="relative grid grid-cols-2 overflow-hidden rounded-[2rem] border border-white/25 bg-white/10 shadow-2xl backdrop-blur-md">
                 {[['Forge','Build AI.','AI Engineering & Development'],['Atlas','Enable AI.','AI Foundation, Data & Platform'],['Sentinel','Secure AI.','AI Security, Risk & Governance'],['Titan','Execute AI.','Agentic, Automation & Functional AI']].map(([name, action, detail], index) => <motion.button initial={{ opacity: 0, scale: .88 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: .28 + index * .1, duration: .4 }} whileHover={{ y: -3, backgroundColor: 'rgba(255,255,255,.15)' }} key={name} onClick={() => navigate(`/family/${name}`)} className="group flex min-h-28 flex-col items-center justify-center border border-white/10 p-3 text-center"><motion.div whileHover={{ rotate: [0, -6, 6, 0], scale: 1.12 }} transition={{ duration: .45 }}><FamilyIcon family={name} color={families[name]?.color} className="mb-1 h-10 w-10" /></motion.div><div className="text-sm font-extrabold uppercase" style={{ color: families[name]?.color }}>{name}</div><div className="text-xs font-bold">{action}</div><div className="mt-0.5 max-w-40 text-[9px] leading-3 text-white/70">{detail}</div></motion.button>)}
               </div>
+              <div className="mt-3"><PlatformRequests variant="banner" assets={assets} loading={assetsLoading} onSubmitted={() => setCatalogRetry(value => value + 1)} /></div>
             </motion.div>
           </div>
           {bannerVariant === 'lifecycle' && <div className="relative mx-auto mb-3 grid max-w-7xl grid-cols-2 gap-px overflow-hidden rounded-xl border border-blue-400/25 bg-blue-400/20 text-[10px] sm:grid-cols-5">
@@ -509,31 +518,31 @@ export function Home() {
         </section>
       )}
 
+      </section>
+
       {/* ── AIV Intelligence Portal banner ──────────────────────────────── */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 bg-gradient-to-r from-sky-50 via-white to-sky-50 px-6 py-3 md:flex-nowrap md:px-10">
       <a
         href={portalContent.aiv_portal_url}
         target="_blank"
         rel="noopener noreferrer"
-        className="group flex items-center justify-between gap-4 border-b border-sky-100 bg-gradient-to-r from-sky-50 via-white to-sky-50 px-6 py-3 transition-colors hover:bg-sky-50 md:px-10"
+        className="group min-w-0 flex-1 rounded-md transition-colors hover:bg-sky-50"
       >
         <div className="flex items-center gap-3">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-600">
             <ExternalLink className="h-3.5 w-3.5" />
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="font-semibold text-sky-700">{portalContent.aiv_portal_name}</span>
+          <div className="flex min-w-0 items-center gap-2 text-sm">
+            <span className="shrink-0 font-semibold text-sky-700">{portalContent.aiv_portal_name}</span>
             <span className="hidden text-gray-400 sm:inline">—</span>
-            <span className="hidden text-gray-500 sm:inline">{portalContent.aiv_portal_description}</span>
+            <span className="hidden truncate text-gray-500 lg:inline" title={portalContent.aiv_portal_description}>{portalContent.aiv_portal_description}</span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-sky-600 group-hover:text-sky-700">
-          Visit Portal <ExternalLink className="h-3 w-3" />
-        </div>
       </a>
+      </div>
 
       {/* ── Main content ────────────────────────────────────────────────── */}
-      <div className="mx-auto max-w-7xl px-6 pt-8 md:px-10">
-
+      <div className="mx-auto max-w-7xl px-6 md:px-10">
         {/* KPI stats */}
         <div className="mb-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-7">
           <div className="mb-5 flex items-start justify-between gap-4">
@@ -546,6 +555,7 @@ export function Home() {
                 <p className="mt-0.5 text-xs text-gray-400">Key metrics across your activity and the catalog</p>
               </div>
             </div>
+            {assetsError && <Button variant="outline" onClick={() => setCatalogRetry(count => count + 1)}>Retry</Button>}
           </div>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
             {STATS.map((stat, i) => (
@@ -594,7 +604,7 @@ export function Home() {
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {Object.entries(families).map(([k, f], i) => (
+              {Object.entries(familiesWithCounts).map(([k, f], i) => (
                 <motion.button type="button" key={k}
                   initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08, duration: .45 }}
                   whileHover={{ y: -3, boxShadow: `0 12px 26px ${f.color}18` }}
@@ -661,7 +671,7 @@ export function Home() {
                       className="group flex cursor-pointer items-center gap-4 py-3 -mx-2 px-2 rounded-lg hover:bg-gray-50 transition-colors">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold text-white"
                         style={{ backgroundColor: fm.color }}>
-                        {a.family.slice(0, 3).toUpperCase()}
+                        {({ titan: 'TTN', forge: 'FRG', sentinel: 'STL', atlas: 'ATL' } as Record<string, string>)[a.family.toLowerCase()] ?? a.family.slice(0, 3).toUpperCase()}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">

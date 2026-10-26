@@ -28,6 +28,14 @@ export interface Submission {
   assigned_reviewer_name?: string;
   assigned_reviewer_email?: string;
   assigned_at?: string;
+  reviewed_by?: string | null;
+  reviewed_by_name?: string | null;
+  reviewed_by_email?: string | null;
+  reviewed_at?: string | null;
+  published_by?: string | null;
+  published_by_name?: string | null;
+  published_by_email?: string | null;
+  published_at?: string | null;
   // Section 1
   owner_name: string | null;
   owner_email: string | null;
@@ -81,6 +89,11 @@ export async function getAllSubmissions(params?: { status?: string; skip?: numbe
 
 export async function getSubmission(id: string): Promise<Submission> {
   const { data } = await apiClient.get<Submission>(`/submissions/${id}`);
+  return data;
+}
+
+export async function getSubmissionVersions(id: string): Promise<Submission[]> {
+  const { data } = await apiClient.get<Submission[]>(`/submissions/${id}/versions`);
   return data;
 }
 
