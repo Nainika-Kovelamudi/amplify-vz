@@ -1,0 +1,70 @@
+# Meeting / Demo Requests
+
+## Implemented scope and Jira mapping
+
+| Ticket | Delivered behavior |
+| --- | --- |
+| AIMPLIFY-68 | Dedicated Meeting / Demo Requests workspace at `/meeting-requests`. Entry points on Home, published asset details, and the chatbot. Request list and status filter, with independent Raise demo request and Schedule meeting subtabs. |
+| AIMPLIFY-69 | Save incomplete drafts, reopen/edit them, cancel drafts, and finalize after confirmation. Capture request title, customer, project, vertical and requirements without requiring a meeting. Independent meeting creation captures a separate meeting title, agenda, date/time, duration, location, existing meeting URL and attendees without requiring any demo request. Revision checks reject conflicting edits. Finalization retries reuse the original request. |
+| AIMPLIFY-70 | Search/select multiple published accelerators, review selected chips, add/remove selections, and optionally include AImplify Platform Demo. Finalization creates a batch and individual owner-routed requests. Retired assets cannot be finalized. |
+| AIMPLIFY-71 | AI Demo Planner recommends catalog accelerators with reasons from saved meeting requirements. Suggestions require explicit selection; nothing is automatically submitted. Chatbot requirements can be transferred into the planner. Manual selection remains available when AI is unavailable. |
+| AIMPLIFY-72 | Record draft creation, changed fields, asset additions/removals, generated recommendations, finalization, cancellation, and calendar download with actor/time/revision. Demo request audit history is retained in the backend and is not displayed as a raw history panel in the request UI. Existing child-request decisions retain their existing audit flow. |
+| AIMPLIFY-73 | Automated backend coverage includes validation, permissions, retired assets, recommendation filtering, concurrency checks, retry-safe finalization, recipient review, calendar escaping/time conversion and provider failure. Local browser checks use mocked API responses; Azure, live AI and Outlook acceptance require deployment verification. |
+
+## User flow
+
+Home → Raise a multi-asset customer demo request → Meeting / Demo Requests console → New request. Raise demo request and Schedule meeting are subtabs within this console; no Meetings / Demos item is added to the main navigation.
+Section 1 — Raise demo request: Fill demo requirements → Ask AI for recommendations → select suggestions and/or search the catalog → Save draft → Review request → confirm recipients and selections → Submit demo request. No date, time, agenda or additional attendees are required.
+
+Section 2 — Schedule meeting: Start a new meeting directly, even before raising any demo request → enter meeting title/date/time/duration → choose attendees → Save meeting details → review recipients → download the Outlook calendar file. Meetings have their own form, list and history, and are not populated from the selected demo request. Customer/project and owner approval are not required. Asset selection is optional; choose published accelerators manually or enter meeting requirements and use the AI Demo Planner. The planner saves the meeting before generating suggestions, so a meeting title, future date/time and at least ten characters of requirements are needed. Review suggestions, add/remove selections and save to persist the tags. Saving or generating AI recommendations creates no demo request, batch, notification or owner workflow. Selected assets are stored in meeting_plan_assets and included in the .ics description; adding/removing tags and generated recommendations are audited. Standalone meeting tags can change without changing any submitted demo request. Deprecated and Decommissioned assets cannot be newly selected. The creator is included automatically; other attendees, including asset owners, are chosen explicitly. Tagging an asset does not automatically invite its owner.
+
+Finalizing creates one `demo_request_batches` record and one `demo_requests` record per selected asset, plus an optional platform demo child. Each child follows the existing owner review and notification flow. Owners manage approvals in Pipeline → Review Queue; requesters track them in Pipeline → My Demo Requests. Demo request routing includes the corresponding asset or platform owners. Independent meeting attendees include only the creator and explicitly chosen attendees; selecting a demo request does not populate the meeting.
+
+Download Outlook calendar invite (.ics) after saving a meeting in the independent Schedule meeting subtab. The file contains the meeting time in UTC, duration, agenda, requirements, assets, attendees, and an existing Teams URL if supplied. Open it in Outlook and review/send it. The app does not create a Teams meeting, reserve calendars, check availability, or automatically send invitations. Automatic Outlook/Teams scheduling needs a separate Microsoft Graph integration and tenant permissions. Submitted request details and selected assets remain immutable; child approval statuses continue to update. Independent meetings use `POST /meeting-plans/standalone`, are listed by `GET /meeting-plans/standalone`, and have state `Scheduled`, `content.plan_kind=meeting` and no batch reference. Update meeting details through `PATCH /meeting-plans/{id}/schedule`; no demo requests are generated. Previously saved demo-linked calendars remain accessible for compatibility, with their original request title preserved. Schedule changes capture before/after values, recipient snapshots, actor and time in the audit history. Saving meeting details only prepares the calendar file; it does not send calendar updates automatically.
+
+## Conversational AI Demo Planner
+
+Both subtabs include a conversation panel alongside the current asset suggestions (stacked on mobile). Start from saved requirements or ask a question, then add constraints through follow-ups. The assistant answers the latest question according to intent. Asset explanations (for example, Explain Sprinter), comparisons and factual questions get direct answers without rerunning or prepending the discovery shortlist; the existing shortlist remains visible separately. For discovery and requirement refinement, the assistant prioritizes matching published catalog assets immediately, names them in the response and explains their fit in the suggestion cards. It asks at most one useful follow-up after showing available matches and does not repeat answered questions. A clarification-only empty shortlist is checked with a separate catalog-matching pass using saved requirements and recent user constraints. If there is no relevant catalog match, the planner returns no invented assets. It also explains documented capabilities and flags customization that needs owner confirmation. Suggestions never automatically change selected assets; use Add to selection / Remove and save the request or meeting.
+
+The planner uses current published catalog data, including description, cloud, family, maturity and technology. Existing provider settings are reused; no additional secret or migration is required. It does not inspect uploaded files or repositories or verify customization feasibility. Meetings still need a title and date/time before the first planner turn can save the independent record; demo requests can save incomplete drafts.
+
+`POST /meeting-plans/{id}/planner-chat` takes a question, expected revision and unique request ID. History is loaded by the server, scoped to the authorized record, rather than accepted from the client. Revision checks prevent stale replies overwriting newer edits. Retry IDs prevent duplicate successful turns. Finalized demo requests and cancelled drafts are read-only; independent Scheduled meetings can continue the conversation.
+
+Questions, AI answers, suggestions, context and actor/time/revision are persisted as append-only `activity_logs` actions `meeting_plan_planner_chat`; failed provider attempts use `meeting_plan_planner_chat_failed`. The most recent 50 exchanges appear in the conversation panel; all exchanges remain in audit history. The last eight exchanges are supplied as recent conversation context along with current requirements and selected assets. Saving or reopening a record retains its conversation. Separate records and subtabs have separate conversations.
+
+Failed replies retain the typed question for retry and do not remove selected assets. AI provider failures leave manual asset selection available. Generating a reply does not raise a demo request, send an owner notification or send a calendar invitation. Deployment requires both frontend and updated backend ZIP; migration 039 remains the current head.
+
+## Storage and access
+
+### Directory attendee suggestions
+
+The attendee field searches existing AIMPLIFY `user_profiles` by name or email (minimum two characters), without requiring Microsoft access. An authenticated `GET /meeting-plans/attendees?search=...` returns at most ten matches and only id/name/email. It does not expose roles, login history, Azure IDs or administrative profile fields. This covers users already known to AIMPLIFY; users not present there can be entered manually or found through the optional Microsoft connection. Select a suggestion to add its email; duplicate addresses are prevented and selections can be removed. The final recipient review and ICS use the selected email addresses. Names shown by directory suggestions are presentation data; the existing meeting schema continues to persist email addresses. Independent meetings include the creator automatically, with all other attendees explicitly selected.
+
+In the frontend's Entra app registration, configure **Microsoft Graph → Delegated permissions → User.ReadBasic.All**. Have the tenant administrator grant consent when organizational policy requires it. This is separate from calendar permissions and does not require the dedicated mailbox password or a client secret. Basic directory profiles are sufficient; `Directory.Read.All` is not required.
+
+Users can optionally click **Connect Microsoft directory** to authorize additional Entra ID searches. AIMPLIFY suggestions remain the default; connected Microsoft results are merged by email and labeled by source. Normal SSO scopes remain unchanged. Searches use silent token acquisition; they do not open login popups automatically. When Microsoft permission, sign-in or Graph access is unavailable, local profile suggestions and manual attendee email entry continue to work. Deploy both frontend and backend for the profile-fallback endpoint; no additional tables, migration or Microsoft permission is required for AIMPLIFY profile search. Live directory lookup must be verified in the tenant after consent. Reference: https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0
+
+- `meeting_plans`: requester, draft/final state, revision, meeting content, recommendations, finalized recipient snapshot, and batch reference.
+- `meeting_plan_assets`: durable associations, asset title snapshots and selection source.
+- `activity_logs`: `entity_type='meeting_plan'`, `entity_id=meeting_plans.id`, actions prefixed `meeting_plan_`.
+- Existing `demo_request_batches` and `demo_requests`: routed owner requests and decisions.
+
+Requesters can access their own plans; platform Admin/Owner roles can manage all plans. Asset owners receive their routed child requests through the existing Pipeline flow, without access to other users' draft plans. Legacy demo requests stay in Pipeline and are not retroactively converted into meeting drafts.
+
+## Deployment
+
+Deploy both frontend and backend. Apply migration **039 after 038** using the normal migration process, or execute `scripts/039_meeting_planning.sql` directly in PostgreSQL. The SQL stops if the current revision is not exactly 038 and updates Alembic only after both tables are created. Do not simply stamp 039 on an unverified database.
+
+The existing LLM configuration used by `call_llm_json` is reused; no new meeting-specific secret is required. Existing email configuration is required for notification emails. AI uses at most the first 200 active published catalog entries ordered by title; the manual picker initially loads up to 500. Suggestions are advisory and do not verify implementation feasibility. No MongoDB knowledge-base synchronization is required for this planner because it reads the current catalog directly.
+
+After deployment verify: normal user cannot open another user's draft; save/reopen a draft; generate live recommendations; add/remove selections; finalize once and retry without duplicate children; check corresponding owner review queues and configured emails; inspect history; open the ICS in the organization's supported Outlook client. Local mocked checks do not replace these integration checks.
+
+## Local validation completed
+
+- Full backend suite: 166 tests passed, including independent meeting creation without a demo request, no generated demo batches/children, meeting title updates, demo-title protection, permissions, revision checks and calendar availability checks.
+- Scoped TypeScript check passed; staging and production Vite builds passed.
+- Headless browser test passed for saving a draft, AI suggestions, accepting/removing selections, recipient confirmation, single finalization, calendar download, history, and desktop/mobile layout. API responses were mocked.
+- `backend.zip`, `backend_prod.zip`, and the CI package passed offline import, route registration, shared model metadata/foreign-key resolution, and migration-head checks (039).
+- No live database migration, Azure deployment, outbound email, or calendar invitation was executed during these checks.
+
+The independent request/scheduling update requires both frontend and backend deployment, including regenerated backend ZIPs. It adds no new tables or migration beyond 039; schedule details remain in `meeting_plans.content` and schedule actions in `activity_logs`.

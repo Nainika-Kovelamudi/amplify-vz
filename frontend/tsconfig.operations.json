@@ -10,9 +10,11 @@
     "src/components/admin/ScoreCapDetails.tsx",
     "src/components/admin/AssetEvaluationRerun.tsx",
     "src/components/catalog/AssetReviewHistory.tsx",
+    "src/components/catalog/AssetLifecycle.tsx",
     "src/pages/ExecutiveReports.tsx",
     "src/components/demo/PlatformRequests.tsx",
     "src/components/demo/PlatformFeedbackList.tsx",
+    "src/pages/MeetingRequests.tsx",
     "src/vite-env.d.ts"
   ]
 }

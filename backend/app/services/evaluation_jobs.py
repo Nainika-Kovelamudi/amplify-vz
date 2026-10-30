@@ -51,7 +51,7 @@ async def enqueue_evaluation(db, entity_id, entity_type, requested_by=None, opti
     previous = getattr(target,'ai_feedback',None) or {}
     settings['previous_agent_scores'] = previous.get('agent_scores') if isinstance(previous,dict) else None
     current = getattr(target.status, 'value', target.status)
-    if current in ('Approved', 'Published', 'Archived'):
+    if current in ('Approved', 'Published', 'Archived', 'Deprecated', 'Decommissioned'):
         settings['preserve_status'] = current
     if entity_type == 'submission' and current == 'Published':
         linked = (await db.execute(select(CatalogAsset).where(or_(

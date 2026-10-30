@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 async def get_current_user(
     token: Annotated[str | None, Depends(oauth2_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request = None,
 ):
     """Decode bearer JWT and load UserProfile from DB. Raises 401 if missing/invalid."""
     from app.db.models import UserProfile
@@ -54,6 +55,9 @@ async def get_current_user(
             detail="User not found.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    from app.services.asset_lifecycle import enforce_request_lifecycle
+    await enforce_request_lifecycle(request, user, db)
 
     # Eagerly access all scalar columns now, while we're inside the async session,
     # so the object is fully hydrated and won't trigger a lazy-load later.

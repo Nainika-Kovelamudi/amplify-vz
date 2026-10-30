@@ -1,3 +1,4 @@
+import { AssetLifecycleControl, LifecycleBadge } from '../components/catalog/AssetLifecycle';
 import { FamilyEditor } from '../components/admin/FamilyEditor';
 import { evaluationWeights } from '../lib/evaluationDisplay';
 import { ScoreCapDetails } from '../components/admin/ScoreCapDetails';
@@ -271,7 +272,7 @@ export function AssetDetail() {
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!user || !asset) return;
+    if (!user || !asset || asset.restricted) return;
     getMyCloneRequests().then((reqs) => {
       const match = reqs.find((r) => r.asset_id === asset.id);
       if (match) setExistingRequest(match);
@@ -279,7 +280,7 @@ export function AssetDetail() {
   }, [user, asset]);
 
   useEffect(() => {
-    if (!user || !asset) return;
+    if (!user || !asset || asset.restricted) return;
     let cancelled = false;
     if (isAdmin) {
       getAllCloneRequests()
@@ -307,6 +308,7 @@ export function AssetDetail() {
         const [current, { items }] = await Promise.all([getCatalogAsset(slug), getCatalog({ limit: 100 })]);
         if (!cancelled) {
           setAsset(current);
+          if(current.restricted){setRelated([]);return;}
           setLikeCount(current.like_count ?? 0);
           setLikedByMe(current.liked_by_me ?? false);
           setDownloadCount(current.artifact_download_count ?? 0);
@@ -420,6 +422,8 @@ export function AssetDetail() {
       </div>
     );
   }
+
+  if(asset.restricted)return <div className="px-6 py-10"><h1 className="mb-3 text-2xl font-bold">{asset.title}</h1><LifecycleBadge status={asset.status}/></div>;
 
   const demoVideos = [...new Set(asset.video_urls ?? [])];
   const primaryVideoUrl = demoVideos[0] ?? '';
@@ -566,6 +570,7 @@ export function AssetDetail() {
                 <GitBranch className="h-3.5 w-3.5" />Request Repo Clone
               </button>
             )}
+            {asset.status==='Published'&&<button className="rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50" onClick={()=>navigate('/meeting-requests/new?asset='+asset.id)}>Add to meeting / demo plan</button>}
             <button onClick={() => { setDemoReqCustomer(''); setDemoReqProject(''); setDemoReqError(''); setShowDemoReqModal(true); }}
               className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-700 hover:bg-amber-100 transition-colors">
               <Users className="h-3.5 w-3.5" />Request Customer Demo
@@ -1224,6 +1229,7 @@ export function AssetDetail() {
               )}
             </div>
 
+            <AssetLifecycleControl assetId={asset.id} onSaved={async()=>{const updated=await getCatalogAsset(asset.id);setAsset(updated);}}/>
             {isAdmin && <FamilyEditor id={asset.id} kind="catalog" currentFamily={asset.family}
               onSaved={family => setAsset(current => current ? { ...current, family } : current)} />}
 

@@ -415,6 +415,9 @@ async def redeem_clone_token(
 
     # Return the GitHub repo URL directly — actual GitHub collaborator access
     # is granted manually by the asset creator outside this platform.
+    if getattr(asset.status, 'value', asset.status) in ('Deprecated','Decommissioned'):
+        raise HTTPException(status_code=403, detail='This asset has been retired. Repository redemption is unavailable.')
+
     repo_url = asset.repo_url or ""
 
     return CloneTokenRedeemResponse(

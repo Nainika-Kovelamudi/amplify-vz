@@ -179,6 +179,7 @@ export function ChatWidget() {
               )}
             </div>
 
+            <div className="border-t border-gray-100 bg-white px-3 pt-2"><button type="button" className="cursor-pointer text-xs font-semibold text-sky-700 hover:underline" onClick={()=>goTo('/meeting-requests/new?requirements='+encodeURIComponent([...messages].reverse().find(m=>m.role==='user')?.content||''))}>Plan a meeting/demo with these requirements</button></div>
             {/* Input */}
             <div className="flex items-center gap-2 border-t border-gray-100 bg-white p-3">
               <input

@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronDown, Loader2, MessageSquare, Presentation, X } from 'lucide-react';
 import { apiClient } from '../../lib/apiClient';
 import type { CatalogAsset } from '../../lib/catalogService';
@@ -12,6 +12,7 @@ interface Feedback { id: string; created_at: string; name: string; email: string
 export function PlatformRequests({ assets, loading, onSubmitted, variant = 'default' }: {
   assets: CatalogAsset[]; loading: boolean; onSubmitted: () => void; variant?: 'default' | 'banner';
 }) {
+  const navigate=useNavigate();
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const [modal, setModal] = useState<'demo' | 'feedback' | null>(null);
@@ -105,7 +106,7 @@ export function PlatformRequests({ assets, loading, onSubmitted, variant = 'defa
 
   return <>
     <div className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 ${variant === 'banner' ? 'w-full justify-center' : 'ml-auto justify-end'}`}>
-      <button type="button" onClick={() => open('demo')} disabled={!user}
+      <button type="button" onClick={() => navigate('/meeting-requests/new')} disabled={!user}
         className="flex max-w-full cursor-pointer items-center gap-1.5 rounded-md bg-sky-600 px-3 py-2 text-left text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
         <Presentation className="h-3.5 w-3.5 shrink-0" /> Raise a multi-asset customer demo request
       </button>

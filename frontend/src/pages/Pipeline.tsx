@@ -1,3 +1,4 @@
+import { AssetLifecyclePanel } from '../components/catalog/AssetLifecycle';
 import { PlatformOperations } from '../components/admin/PlatformOperations';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
@@ -160,6 +161,8 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; 
   On_Hold:         { label: 'On Hold',            color: '#F59E0B', bg: '#FEF3C7', icon: Clock },
   Published:       { label: 'Published',          color: '#059669', bg: '#ECFDF5', icon: Rocket },
   Archived:        { label: 'Removed from Catalog', color: '#6B7280', bg: '#F3F4F6', icon: XCircle },
+  Deprecated:      { label: 'Deprecated', color: '#B45309', bg: '#FEF3C7', icon: XCircle },
+  Decommissioned:  { label: 'Decommissioned', color: '#BE123C', bg: '#FFE4E6', icon: XCircle },
 };
 
 // ── Role helpers ──────────────────────────────────────────────────────────────
@@ -352,6 +355,8 @@ function SubmissionCard({
   const [adminNote, setAdminNote] = useState('');
   const hasFeedback = !!sub.ai_feedback;
   const StatusIcon = cfg.icon;
+
+  if(sub.restricted)return <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white p-5"><h3 className="font-semibold">{sub.title}</h3><span className="rounded-full px-3 py-1 text-xs font-semibold" style={{color:cfg.color,backgroundColor:cfg.bg}}>{cfg.label}</span></div>;
 
   return (
     <motion.div
@@ -599,7 +604,7 @@ function SubmissionCard({
 
 // ── Pipeline Page ─────────────────────────────────────────────────────────────
 
-type GroupTab = 'my-work' | 'review' | 'all-activity' | 'platform-feedback' | 'operations';
+type GroupTab = 'my-work' | 'review' | 'all-activity' | 'platform-feedback' | 'operations' | 'lifecycle';
 // Hidden by default; enable explicitly when building the frontend.
 const ASSET_OPERATIONS_ENABLED = import.meta.env.VITE_ASSET_OPERATIONS_ENABLED?.trim().toLowerCase() === 'true';
 
@@ -639,14 +644,16 @@ export function Pipeline() {
   const [activeTab, setActiveTab] = useState<GroupTab>(() => {
     const t = searchParams.get('tab');
     if (t === 'review' || t === 'all-activity' || t === 'platform-feedback') return t as GroupTab;
+    if (t === 'lifecycle' && (isAdmin || isOwner)) return 'lifecycle';
     if (t === 'operations' && ASSET_OPERATIONS_ENABLED) return 'operations';
     return 'my-work';
   });
   const [mySubFilter, setMySubFilter] = useState<string>('All');
   useEffect(() => {
+    if (searchParams.get('tab') === 'lifecycle') setActiveTab(isAdmin || isOwner ? 'lifecycle':'my-work');
     if (searchParams.get('tab') === 'platform-feedback') setActiveTab('platform-feedback');
     if (searchParams.get('tab') === 'operations') setActiveTab(ASSET_OPERATIONS_ENABLED ? 'operations' : 'my-work');
-  }, [searchParams]);
+  }, [searchParams,isAdmin,isOwner]);
   const [allSubFilter, setAllSubFilter] = useState<string>('All');
   const [myWorkSubTab, setMyWorkSubTab] = useState<'submissions' | 'clones' | 'incoming-clones' | 'demo-requests' | 'incoming-demos'>('submissions');
   const [incomingDemoLoading, setIncomingDemoLoading] = useState(true);
@@ -1068,6 +1075,7 @@ export function Pipeline() {
     { id: 'review',       label: 'Review Queue',  icon: ClipboardList, count: reviewCount,      show: isAdmin || isOwner || allDemoRequests.length > 0 || assignedReviewQueue.length > 0 },
     { id: 'all-activity', label: 'All Activity',  icon: LayoutGrid,    count: allActivityCount, show: isAdmin || isOwner },
     { id: 'platform-feedback', label: 'Platform Feedback', icon: MessageSquare, count: 0, show: isAdmin || isOwner },
+    { id: 'lifecycle', label: 'Asset Lifecycle', icon: ClipboardList, count: 0, show: isAdmin || isOwner },
     { id: 'operations', label: isAdmin || isOwner ? 'Asset Operations' : 'My Remediations', icon: ClipboardList, count: 0, show: ASSET_OPERATIONS_ENABLED },
   ].filter(t => t.show) as { id: GroupTab; label: string; icon: React.ElementType; count: number; show: boolean }[];
 
@@ -1193,7 +1201,7 @@ export function Pipeline() {
                 >
                   <Icon className="h-4 w-4" />
                   {label}
-                  {id !== 'platform-feedback' && id !== 'operations' && <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                  {id !== 'platform-feedback' && id !== 'operations' && id !== 'lifecycle' && <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
                     active ? 'bg-sky-100 text-sky-700' : 'bg-gray-100 text-gray-500'
                   }`}>{count}</span>}
                   {active && (
@@ -1217,6 +1225,7 @@ export function Pipeline() {
 
       {/* ── Tab Content ─────────────────────────────────────────────────── */}
       <div className="mx-auto w-full max-w-5xl px-4 pt-6">
+        {(isAdmin || isOwner) && activeTab === 'lifecycle' && <AssetLifecyclePanel/>}
         {ASSET_OPERATIONS_ENABLED && activeTab === 'operations' && <PlatformOperations />}
         {activeTab === 'platform-feedback' && (isAdmin || isOwner) && <PlatformFeedbackList />}
 

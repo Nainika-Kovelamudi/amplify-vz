@@ -4,6 +4,7 @@ import { defaultFamilyBadge, familyAction, useFamilies } from '../../context/Fam
 import { CC, CL, MC, ML } from '../../data/uiConstants';
 import { ArrowRight } from 'lucide-react';
 import type { CatalogAsset } from '../../lib/catalogService';
+import { LifecycleBadge } from './AssetLifecycle';
 
 interface AssetRowProps {
   asset: CatalogAsset;
@@ -16,8 +17,7 @@ export function AssetRow({ asset, index }: AssetRowProps) {
   const fm = families[asset.family] ?? defaultFamilyBadge();
 
   const CLOUD_KEYS = new Set(['aws', 'gcp', 'azure']);
-  const techStack: string[] = Array.isArray(asset.tech_stack) ? asset.tech_stack : [];
-  const cloudTags = techStack.filter((c) => CLOUD_KEYS.has(c.toLowerCase()));
+  const cloudTags = (asset.cloud_provider || '').split(',').map(c=>c.trim()).filter(c=>CLOUD_KEYS.has(c.toLowerCase()));
 
   return (
     <motion.div
@@ -25,19 +25,22 @@ export function AssetRow({ asset, index }: AssetRowProps) {
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.3, delay: index * 0.03 }}
       whileHover={{ x: 4, backgroundColor: '#FAFBFC' }}
-      onClick={() => navigate(`/catalog/${asset.slug}`)}
-      className="group flex cursor-pointer items-center gap-4 rounded-lg border border-gray-200 p-3.5 shadow-sm transition-all hover:shadow-md"
+      onClick={asset.restricted ? undefined : () => navigate(`/catalog/${asset.slug}`)}
+      className={`group flex items-center gap-4 rounded-lg border border-gray-200 p-3.5 shadow-sm transition-all hover:shadow-md ${asset.restricted?'cursor-default':'cursor-pointer'}`}
       style={{ backgroundColor: `${fm.color}12` }}
     >
-      <span className="min-w-[60px] rounded bg-gray-50 px-2 py-1 font-mono text-[10px] font-medium text-gray-500">
+      {(!asset.restricted||asset.catalog_preview) && <span className="min-w-[60px] rounded bg-gray-50 px-2 py-1 font-mono text-[10px] font-medium text-gray-500">
         {asset.catalog_code}
-      </span>
+      </span>}
 
       <div className="flex-1 min-w-0">
         <div className="truncate text-sm font-semibold text-gray-900">{asset.title}</div>
         <div className="truncate text-xs text-gray-500 mt-0.5">{asset.description}</div>
       </div>
 
+      {['Deprecated','Decommissioned'].includes(asset.status) && <LifecycleBadge status={asset.status}/>}
+
+      {(!asset.restricted||asset.catalog_preview) && <>
       <span className="shrink-0 whitespace-nowrap text-[10px] font-bold uppercase tracking-wider" style={{ color: fm.color }}>
         {fm.name} — {familyAction(asset.family)}
       </span>
@@ -68,7 +71,8 @@ export function AssetRow({ asset, index }: AssetRowProps) {
         )}
       </div>
 
-      <ArrowRight className="h-4 w-4 text-gray-300 transition-transform group-hover:translate-x-1 group-hover:text-gray-500" />
+      {!asset.restricted&&<ArrowRight className="h-4 w-4 text-gray-300 transition-transform group-hover:translate-x-1 group-hover:text-gray-500" />}
+      </>}
     </motion.div>
   );
 }

@@ -1,0 +1,51 @@
+name: PR validation
+on:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # The root tsconfig contains project references and no files. Check the
+      # operations/report scope explicitly while legacy app type errors remain.
+      - run: npx tsc -p tsconfig.operations.json --noEmit
+      - name: Build without deployment credentials
+        run: npm run build:staging
+        env:
+          VITE_API_URL: https://example.invalid
+          VITE_AZURE_TENANT_ID: 00000000-0000-0000-0000-000000000000
+          VITE_AZURE_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+asyncpg://ci:ci@localhost/ci
+      JWT_SECRET: ci-only-placeholder-not-used-for-deployment
+      AZURE_TENANT_ID: 00000000-0000-0000-0000-000000000000
+      AZURE_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt pytest==8.3.3 pytest-asyncio==0.24.0
+      - run: python -m compileall -q app
+      - run: python -m pytest tests -q
+      - run: python scripts/build_ci_backend.py
+      - name: Check the packaged application
+        run: python scripts/verify_backend_package.py ci_artifacts/backend.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ github.sha }}
+          path: ci_artifacts/
+          retention-days: 14

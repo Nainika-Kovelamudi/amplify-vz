@@ -12,7 +12,12 @@ import tempfile
 import zipfile
 
 REQUIRED = {
+    'app/services/document_reader.py',
+    'app/routers/meeting_plans.py', 'app/schemas/meeting_plan.py', 'app/services/meeting_planning.py',
+    'app/db/migrations/versions/039_meeting_planning.py',
     'app/routers/catalog_review.py',
+    'app/routers/asset_lifecycle.py', 'app/services/asset_lifecycle.py',
+    'app/db/migrations/versions/038_asset_lifecycle.py',
     'app/routers/metadata_operations.py',
     "app/services/family_assignment.py",
     'app/services/executive_report_data.py',
@@ -28,9 +33,22 @@ from app.db.base import Base
 from app.schemas.submission import SubmissionUpdate
 from alembic.script import ScriptDirectory
 from alembic.config import Config
+from app.services.document_reader import _read_pptx
+import io,zipfile
+fixture=io.BytesIO()
+with zipfile.ZipFile(fixture,'w') as archive:
+    archive.writestr('ppt/slides/slide1.xml','<s xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:p><a:r><a:t>Packaged PPTX extraction verified</a:t></a:r></a:p></s>')
+assert 'Packaged PPTX extraction verified' in _read_pptx(fixture.getvalue(),6000)
 paths = {(r.path,m) for r in app.routes for m in (getattr(r,'methods',None) or [])}
-for path,method in [('/admin/platform-operations/inventory','GET'),
+for path,method in [('/meeting-plans','GET'), ('/meeting-plans','POST'),
+                    ('/meeting-plans/{plan_id}/planner-chat','POST'),
+                    ('/meeting-plans/attendees','GET'),
+                    ('/meeting-plans/standalone','GET'), ('/meeting-plans/standalone','POST'),
+                    ('/meeting-plans/{plan_id}/schedule','PATCH'),
+                    ('/meeting-plans/{plan_id}/recommend','POST'), ('/meeting-plans/{plan_id}/finalize','POST'),
+                    ('/meeting-plans/{plan_id}/invite','GET'), ('/meeting-plans/{plan_id}/history','GET'),('/admin/platform-operations/inventory','GET'),
                     ('/catalog/{asset_id}/review-history','GET'),
+                    ('/asset-lifecycle','GET'), ('/asset-lifecycle/{asset_id}','PATCH'),
                     ('/admin/platform-operations/metadata','GET'),
                     ('/admin/platform-operations/assets/{asset_id}/metadata','PATCH'),
                     ('/admin/platform-operations/evaluations','POST'),
@@ -43,24 +61,24 @@ for path,method in [('/admin/platform-operations/inventory','GET'),
                     ('/submissions/{submission_id}/family','PATCH')]:
     assert (path,method) in paths, (path,method)
 from app.db.models import Base as ModelBase, UserProfile, CatalogAsset
-from app.db.operations_models import EvaluationJob, RemediationItem
+from app.db.operations_models import EvaluationJob, RemediationItem, MeetingPlan, MeetingPlanAsset
 import inspect
 from app.routers.admin import get_executive_report
 assert 'build_executive_report' in inspect.getsource(get_executive_report)
 assert 'refresh' in inspect.signature(get_executive_report).parameters
 assert Base is ModelBase
-assert {'evaluation_jobs','asset_remediations','user_profiles','catalog_assets','platform_feedback'} <= set(Base.metadata.tables)
+assert {'evaluation_jobs','asset_remediations','user_profiles','catalog_assets','platform_feedback','meeting_plans','meeting_plan_assets'} <= set(Base.metadata.tables)
 assert {'asset_id','asset_title'} <= set(Base.metadata.tables['platform_feedback'].columns.keys())
 for table in Base.metadata.tables.values():
     for foreign_key in table.foreign_keys:
         assert foreign_key.column.table.metadata is Base.metadata
-for model in (EvaluationJob,RemediationItem):
+for model in (EvaluationJob,RemediationItem,MeetingPlan,MeetingPlanAsset):
     assert model.__mapper__._sorted_tables  # Exercises FK resolution used during ORM flush.
 
 assert SubmissionUpdate(family='sEnTiNeL').family == 'Sentinel'
 assert SubmissionUpdate(cloud_provider='azure, AWS').cloud_provider == 'Azure, AWS'
-assert ScriptDirectory.from_config(Config('alembic.ini')).get_heads() == ['037']
-print('Imported shipped application; operations/report routes, models, metadata and head 037 verified.')
+assert ScriptDirectory.from_config(Config('alembic.ini')).get_heads() == ['039']
+print('Imported shipped application; operations/report routes, models, metadata and head 039 verified.')
 '''
 
 

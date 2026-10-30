@@ -46,6 +46,8 @@ class AssetStatus(str, enum.Enum):
     Rejected = "Rejected"
     On_Hold = "On_Hold"
     Archived = "Archived"
+    Deprecated = "Deprecated"
+    Decommissioned = "Decommissioned"
 
 
 class SubmissionStatus(str, enum.Enum):
@@ -58,6 +60,8 @@ class SubmissionStatus(str, enum.Enum):
     Rejected = "Rejected"
     On_Hold = "On_Hold"
     Archived = "Archived"
+    Deprecated = "Deprecated"
+    Decommissioned = "Decommissioned"
 
 
 class CloneEnvironment(str, enum.Enum):

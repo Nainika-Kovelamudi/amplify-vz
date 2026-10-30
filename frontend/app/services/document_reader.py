@@ -1,7 +1,7 @@
 """
 document_reader.py — fetch and extract text from uploaded artifact documents.
 
-Supported formats: PDF (.pdf), Word (.docx/.doc), Excel (.xlsx/.xls),
+Supported formats: PDF (.pdf), Word (.docx/.doc), Excel (.xlsx/.xls), PowerPoint (.pptx),
 plain text (.txt / .md / .rst). Images (.png/.jpg/.svg) are acknowledged
 but not text-extracted (no OCR).
 
@@ -17,7 +17,12 @@ from __future__ import annotations
 import io
 import json
 import logging
+import posixpath
+import re
+import zipfile
 from pathlib import PurePosixPath
+from urllib.parse import unquote, urlsplit
+from xml.etree import ElementTree
 
 import httpx
 
@@ -98,7 +103,8 @@ async def _fetch_and_extract(url: str, cap: int) -> tuple[str, str]:
         logger.warning("document_reader: failed to download %s — %s", url, exc)
         return "", "download_failed"
 
-    path_suffix = PurePosixPath(url.split("?")[0]).suffix.lower()
+    path_suffix = PurePosixPath(unquote(urlsplit(url).path)).suffix.lower()
+    content_type = content_type.lower()
 
     # ── PDF ───────────────────────────────────────────────────────────────────
     if path_suffix == ".pdf" or "pdf" in content_type:
@@ -111,6 +117,10 @@ async def _fetch_and_extract(url: str, cap: int) -> tuple[str, str]:
     # ── Excel (.xlsx / .xls) ─────────────────────────────────────────────────
     if path_suffix in (".xlsx", ".xls") or "spreadsheetml" in content_type or "ms-excel" in content_type:
         return _read_xlsx(raw, cap), "xlsx"
+
+    # ── PowerPoint (.pptx): slide text, grouped shapes and table cells ─────────
+    if path_suffix == ".pptx" or "presentationml.presentation" in content_type:
+        return _read_pptx(raw, cap), "pptx"
 
     # ── Plain text / Markdown ─────────────────────────────────────────────────
     if path_suffix in (".txt", ".md", ".rst", ".csv") or content_type.startswith("text/"):
@@ -184,6 +194,64 @@ def _read_text(data: bytes, cap: int) -> str:
         return _truncate(data.decode("utf-8", errors="replace"), cap)
     except Exception:
         return ""
+
+
+def _read_pptx(data: bytes, cap: int) -> str:
+    """Read bounded OOXML slide text without running Office or adding dependencies.
+
+    Presentation relationships determine slide order, including reordered decks.
+    Images, speaker notes, masters and embedded files are not treated as slide text.
+    """
+    drawing = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    presentation = '{http://schemas.openxmlformats.org/presentationml/2006/main}'
+    relationship = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            if len(archive.infolist()) > 10000:raise ValueError('Too many presentation members')
+            total_xml = 0
+
+            def xml(name):
+                nonlocal total_xml
+                info = archive.getinfo(name)
+                total_xml += info.file_size
+                if info.file_size > 2 * 1024 * 1024 or total_xml > 8 * 1024 * 1024:
+                    raise ValueError('Presentation XML exceeds extraction limits')
+                content = archive.read(info)
+                if b'<!DOCTYPE' in content.upper() or b'<!ENTITY' in content.upper():
+                    raise ValueError('Presentation XML contains unsupported declarations')
+                return ElementTree.fromstring(content)
+
+            names = set(archive.namelist())
+            if {'ppt/presentation.xml','ppt/_rels/presentation.xml.rels'} <= names:
+                relations = {}
+                for rel in xml('ppt/_rels/presentation.xml.rels'):
+                    if rel.get('TargetMode') == 'External' or not (rel.get('Type') or '').endswith('/slide'):continue
+                    target = rel.get('Target','')
+                    target = posixpath.normpath(target.lstrip('/') if target.startswith('/') else posixpath.join('ppt',target))
+                    if target.startswith('ppt/slides/') and target.endswith('.xml') and target in names:
+                        relations[rel.get('Id')] = target
+                slides = [relations[node.get(relationship+'id')] for node in xml('ppt/presentation.xml').iter(presentation+'sldId')
+                          if node.get(relationship+'id') in relations]
+            else:
+                slides = sorted((name for name in names if re.fullmatch(r'ppt/slides/slide\d+\.xml',name)),
+                                key=lambda name:int(re.search(r'slide(\d+)',name).group(1)))
+
+            parts = []; length = 0
+            for number, name in enumerate(slides[:200],1):
+                paragraphs = []
+                for paragraph in xml(name).iter(drawing+'p'):
+                    text = ''.join((node.text or '') if node.tag == drawing+'t' else '\n' if node.tag == drawing+'br' else ''
+                                   for node in paragraph.iter()).strip()
+                    if text:paragraphs.append(text)
+                    if sum(len(value) for value in paragraphs) >= cap:break
+                if paragraphs:
+                    section = f'[Slide {number}]\n'+'\n'.join(paragraphs)
+                    parts.append(section);length += len(section)
+                    if length >= cap:break
+            return _truncate('\n\n'.join(parts),cap)
+    except Exception as exc:
+        logger.warning('document_reader: PPTX extraction failed — %s',exc)
+        return ''
 
 
 def _truncate(text: str, cap: int) -> str:

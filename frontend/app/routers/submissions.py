@@ -25,6 +25,10 @@ router = APIRouter(prefix="/submissions", tags=["Submissions"])
 
 
 def _to_response(s: Submission, catalog_asset_id: str | None = None) -> SubmissionResponse:
+    if getattr(s.status, 'value', s.status) in ('Deprecated','Decommissioned'):
+        return SubmissionResponse(id=s.id, title=s.title, status=getattr(s.status,'value',s.status),
+            restricted=True, description='', family='', department='', maturity='', demo_ready=False,
+            created_at=datetime(1970,1,1,tzinfo=timezone.utc))
     return SubmissionResponse(
         id=s.id,
         catalog_asset_id=catalog_asset_id or s.catalog_code,
@@ -69,6 +73,7 @@ def _to_response(s: Submission, catalog_asset_id: str | None = None) -> Submissi
 
 async def _with_review_details(db: AsyncSession, sub: Submission) -> SubmissionResponse:
     response = _to_response(sub)
+    if response.restricted: return response
     profile_ids = [profile_id for profile_id in (sub.submitter_id, sub.reviewed_by, sub.assigned_reviewer_id) if profile_id]
     profiles = (await db.execute(select(UserProfile).where(UserProfile.id.in_(profile_ids)))).scalars().all() if profile_ids else []
     by_id = {profile.id: profile for profile in profiles}

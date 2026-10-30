@@ -64,6 +64,7 @@ class SubmissionUpdate(MetadataRules):
 
 
 class SubmissionResponse(BaseModel):
+    restricted: bool = False
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID

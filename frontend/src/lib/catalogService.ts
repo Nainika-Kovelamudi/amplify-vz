@@ -2,6 +2,8 @@ import { apiClient } from './apiClient';
 import { authStore } from '../store/authStore';
 
 export interface CatalogAsset {
+  restricted?: boolean;
+  catalog_preview?: boolean;
   aiv_ideation_id: string | null;
   aiv_ideation_title: string | null;
   id: string;

@@ -14,7 +14,7 @@ from starlette.requests import ClientDisconnect
 
 from app.config import get_settings
 from app.db.base import get_db
-from app.deps.rbac import require_role
+from app.deps.rbac import get_current_user, require_role
 from app.services.blob_service import delete_blob, make_blob_name, make_direct_upload_urls, make_html_attachment_url, upload_blob, upload_blob_stream
 
 logger = logging.getLogger(__name__)
@@ -267,7 +267,7 @@ async def download_html_collateral(
 
 
 @router.get("/local/{filename:path}")
-async def serve_local_file(filename: str) -> StreamingResponse:
+async def serve_local_file(filename: str, user=Depends(get_current_user)) -> StreamingResponse:
     path = os.path.join(_LOCAL_UPLOADS_DIR, filename)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="File not found.")

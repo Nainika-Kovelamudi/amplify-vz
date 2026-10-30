@@ -1,3 +1,4 @@
+import { apiClient } from '../lib/apiClient';
 import { useEffect, useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
@@ -7,7 +8,7 @@ import { AssetRow } from '../components/catalog/AssetRow';
 import { Button } from '../components/ui/Button';
 import { Download, LayoutGrid, List, SearchX } from 'lucide-react';
 import { cn } from '../utils/cn';
-import { getCatalog, type CatalogAsset } from '../lib/catalogService';
+import { getCatalog, getCatalogAsset, type CatalogAsset } from '../lib/catalogService';
 import { usePortalSettings } from '../context/PortalSettingsContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -26,6 +27,7 @@ export function Catalog() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [lifecycleFilter,setLifecycleFilter]=useState('All');
   const [familyFilter, setFamilyFilter] = useState('all');
   const [cloudFilter, setCloudFilter] = useState('');
   const [maturityFilter, setMaturityFilter] = useState(() => searchParams.get('maturity') || '');
@@ -33,17 +35,23 @@ export function Catalog() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [isDownloading, setIsDownloading] = useState(false);
 
+  useEffect(()=>{if(!canDownload)setLifecycleFilter('All');},[canDownload]);
+
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
     setLoadError(false);
-    getCatalog({ limit: 500 }).then(({ items }) => {
-      if (!cancelled) { setAssets(items); setIsLoading(false); }
+    const status=!canDownload||lifecycleFilter==='Active'?'Deprecated':lifecycleFilter;
+    Promise.all([getCatalog({ limit: 500 }),apiClient.get<{items:{id:string;title:string;status:string;restricted:boolean;preview?:Partial<CatalogAsset>}[]}>('/asset-lifecycle',{params:{status}})]).then(async ([{items},{data}]) => {
+      const retired=await Promise.all(data.items.filter(a=>['Deprecated','Decommissioned'].includes(a.status)).map(async a=>canDownload
+        ? {...await getCatalogAsset(a.id),restricted:false}
+        : ({slug:a.id,description:'',family:'',department:'',tech_stack:[],cloud_provider:null,maturity:null,demo_ready:false,...a,...a.preview,restricted:true,catalog_preview:!!a.preview} as CatalogAsset)));
+      if (!cancelled) { setAssets([...items,...retired]); setIsLoading(false); }
     }).catch(() => {
       if (!cancelled) { setLoadError(true); setIsLoading(false); }
     });
     return () => { cancelled = true; };
-  }, [reloadKey]);
+  }, [reloadKey,canDownload,lifecycleFilter]);
 
   const toggleCloud = (cloud: string) => setCloudFilter((current) => current === cloud ? '' : cloud);
   const toggleMaturity = (maturity: string) => setMaturityFilter((current) => current === maturity ? '' : maturity);
@@ -136,6 +144,9 @@ export function Catalog() {
   };
 
   const filteredAssets = useMemo(() => assets.filter((a) => {
+    if(lifecycleFilter==='Active'&&a.status!=='Published')return false;
+    if(!canDownload&&a.status==='Decommissioned')return false;
+    if(['Deprecated','Decommissioned'].includes(lifecycleFilter)&&a.status!==lifecycleFilter)return false;
     if (familyFilter !== 'all' && a.family !== familyFilter) return false;
     if (cloudFilter && !a.cloud_provider?.toLowerCase().includes(cloudFilter)) return false;
     if (maturityFilter && a.maturity !== maturityFilter) return false;
@@ -145,7 +156,7 @@ export function Catalog() {
       return a.title.toLowerCase().includes(s) || a.description.toLowerCase().includes(s) || a.catalog_code.toLowerCase().includes(s);
     }
     return true;
-  }), [assets, familyFilter, cloudFilter, maturityFilter, demoReady, query]);
+  }), [assets, lifecycleFilter, canDownload, familyFilter, cloudFilter, maturityFilter, demoReady, query]);
 
   const FilterChip = ({ active, onClick, color, dot, children }: { active: boolean; onClick: () => void; color: string; dot?: boolean; children: React.ReactNode }) => (
     <button
@@ -179,10 +190,10 @@ export function Catalog() {
             </Button>
           )}
           <div className="flex items-center rounded-lg bg-gray-100 p-1">
-            <button onClick={() => setViewMode('grid')} className={cn("rounded-md p-1.5 transition-all", viewMode === 'grid' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900")}>
+            <button aria-label="Grid view" onClick={() => setViewMode('grid')} className={cn("rounded-md p-1.5 transition-all", viewMode === 'grid' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900")}>
               <LayoutGrid className="h-4 w-4" />
             </button>
-            <button onClick={() => setViewMode('list')} className={cn("rounded-md p-1.5 transition-all", viewMode === 'list' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900")}>
+            <button aria-label="List view" onClick={() => setViewMode('list')} className={cn("rounded-md p-1.5 transition-all", viewMode === 'list' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900")}>
               <List className="h-4 w-4" />
             </button>
           </div>
@@ -190,6 +201,7 @@ export function Catalog() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 px-4 pb-6 md:px-10">
+        {canDownload&&<label className="mr-2 text-xs font-semibold">Lifecycle status<select className="ml-2 rounded-lg border border-gray-200 bg-white px-3 py-2" value={lifecycleFilter} onChange={e=>setLifecycleFilter(e.target.value)}>{['All','Active','Deprecated','Decommissioned'].map(v=><option key={v} value={v}>{v}</option>)}</select></label>}
         <FilterChip active={familyFilter === 'all'} onClick={() => setFamilyFilter('all')} color="#6B7280">All</FilterChip>
         {Object.entries(families).map(([k, f]) => (
           <FilterChip key={k} active={familyFilter === k} onClick={() => setFamilyFilter(k)} color={f.color}>{f.name}</FilterChip>
@@ -208,8 +220,8 @@ export function Catalog() {
         ))}
         <div className="h-6 w-px bg-gray-200 mx-1" />
         <FilterChip active={demoReady} onClick={() => setDemoReady(!demoReady)} color="#22C55E">Demo Ready</FilterChip>
-        {(cloudFilter || maturityFilter || demoReady || familyFilter !== 'all' || query) && (
-          <button onClick={() => { setCloudFilter(''); setMaturityFilter(''); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }} className="ml-2 text-xs font-medium text-gray-500 hover:text-gray-900 underline underline-offset-2">
+        {(cloudFilter || maturityFilter || demoReady || familyFilter !== 'all' || query || lifecycleFilter!=='All') && (
+          <button onClick={() => { setLifecycleFilter('All'); setCloudFilter(''); setMaturityFilter(''); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }} className="ml-2 text-xs font-medium text-gray-500 hover:text-gray-900 underline underline-offset-2">
             Clear all
           </button>
         )}
@@ -227,7 +239,7 @@ export function Catalog() {
             <SearchX className="mb-4 h-12 w-12 text-gray-300" />
             <h3 className="text-lg font-bold text-gray-900">No matching assets found</h3>
             <p className="mt-1 text-sm text-gray-500">Try adjusting your filters or search query.</p>
-            <Button variant="outline" className="mt-6" onClick={() => { setCloudFilter(''); setMaturityFilter(''); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }}>
+            <Button variant="outline" className="mt-6" onClick={() => { setLifecycleFilter('All'); setCloudFilter(''); setMaturityFilter(''); setDemoReady(false); setFamilyFilter('all'); setSearchParams({}); }}>
               Clear filters
             </Button>
           </div>

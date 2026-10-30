@@ -130,6 +130,17 @@ ZIP_PATCH_FILES = {
     "app/routers/users.py": os.path.join(ZIP_PATCHES_DIR, "users.py"),
 }
 ZIP_PATCH_FILES.update({
+    "app/services/document_reader.py": os.path.join(REPO_DIR, "app/services/document_reader.py"),
+    "app/routers/meeting_plans.py": os.path.join(REPO_DIR, "app/routers/meeting_plans.py"),
+    "app/schemas/meeting_plan.py": os.path.join(REPO_DIR, "app/schemas/meeting_plan.py"),
+    "app/services/meeting_planning.py": os.path.join(REPO_DIR, "app/services/meeting_planning.py"),
+    "app/db/migrations/versions/039_meeting_planning.py": os.path.join(REPO_DIR, "app/db/migrations/versions/039_meeting_planning.py"),
+
+    "app/routers/feedback.py": os.path.join(REPO_DIR, "app/routers/feedback.py"),
+    "app/db/migrations/versions/038_asset_lifecycle.py": os.path.join(REPO_DIR, "app/db/migrations/versions/038_asset_lifecycle.py"),
+    "app/services/asset_lifecycle.py": os.path.join(REPO_DIR, "app/services/asset_lifecycle.py"),
+    "app/routers/asset_lifecycle.py": os.path.join(REPO_DIR, "app/routers/asset_lifecycle.py"),
+    "app/deps/rbac.py": os.path.join(REPO_DIR, "app/deps/rbac.py"),
     "app/routers/catalog_review.py": os.path.join(REPO_DIR, "app/routers/catalog_review.py"),
     "app/routers/metadata_operations.py": os.path.join(REPO_DIR, "app/routers/metadata_operations.py"),
     "app/services/family_assignment.py": os.path.join(REPO_DIR, "app/services/family_assignment.py"),

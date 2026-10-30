@@ -1,0 +1,11 @@
+{
+  "$schema": "https://aka.ms/azure/static-web-apps-cli/schema",
+  "configurations": {
+    "production": {
+      "appLocation": ".",
+      "outputLocation": "dist_prod",
+      "swaConfigLocation": "dist_prod",
+      "appBuildCommand": "npm run build:prod"
+    }
+  }
+}

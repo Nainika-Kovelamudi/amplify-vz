@@ -27,6 +27,10 @@ from app.services.family_assignment import FamilyUpdate, change_family
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Catalog"])
+from app.routers.meeting_plans import router as meeting_plan_router
+router.include_router(meeting_plan_router)
+from app.routers.asset_lifecycle import router as lifecycle_router
+router.include_router(lifecycle_router)
 from app.routers.catalog_review import router as catalog_review_router
 router.include_router(catalog_review_router)
 
@@ -296,7 +300,7 @@ async def get_asset(slug: str, db: AsyncSession = Depends(get_db), user=Depends(
     is_privileged = user.role in (UserRole.admin, UserRole.owner)
 
     # Admins and owners can view any asset; regular users only see Published ones
-    status_filter = [] if is_privileged else [CatalogAsset.status == AssetStatus.Published]
+    status_filter = [] if is_privileged else [CatalogAsset.status.in_([AssetStatus.Published, AssetStatus.Deprecated, AssetStatus.Decommissioned])]
 
     result = await db.execute(
         select(CatalogAsset, UserProfile.display_name, UserProfile.email)
@@ -318,6 +322,10 @@ async def get_asset(slug: str, db: AsyncSession = Depends(get_db), user=Depends(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
     asset, owner_display_name, owner_profile_email = row
+    if not is_privileged and asset.status in (AssetStatus.Deprecated, AssetStatus.Decommissioned):
+        from fastapi.responses import JSONResponse
+        from app.services.asset_lifecycle import label
+        return JSONResponse(label(asset))
     from app.db.models import CloneRequest, CloneStatus, AssetLike
     from sqlalchemy import func as _func
     clone_count_result = await db.execute(

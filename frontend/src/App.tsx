@@ -1,3 +1,4 @@
+import { MeetingRequests } from './pages/MeetingRequests';
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
@@ -52,6 +53,8 @@ function App() {
               <Route path="catalog/:slug/demo" element={<AssetDemo />} />
               <Route path="family/:id" element={<FamilyDetail />} />
               <Route path="pipeline" element={<Pipeline />} />
+              <Route path="meeting-requests" element={<MeetingRequests />} />
+              <Route path="meeting-requests/:planId" element={<MeetingRequests />} />
               <Route path="pipeline/:id" element={<PipelineDetail />} />
               <Route path="submit" element={<Submit />} />
               <Route path="why" element={<WhyAimplify />} />

@@ -207,7 +207,8 @@ Write your answer now."""
             )
         return {"answer": answer, "sources": [{"title": "Catalog", "link": "/catalog", "source_type": "page"}], "is_confident": True}
 
-    results = retrieval["results"]
+    from app.services.asset_lifecycle import filter_live_catalog_results
+    results = await filter_live_catalog_results(retrieval["results"])
     if not results:
         return {
             "answer": "I couldn't retrieve matching details for that question. This doesn't mean "

@@ -10,7 +10,8 @@ from app.db.base import get_db as get_session
 from app.db.models import AssetFeedback, CatalogAsset
 from app.schemas.feedback import FeedbackCreate, FeedbackOut
 
-router = APIRouter(prefix="/catalog", tags=["feedback"])
+from app.deps.rbac import get_current_user
+router = APIRouter(prefix="/catalog", tags=["feedback"], dependencies=[Depends(get_current_user)])
 
 
 async def _get_asset(asset_id: uuid.UUID, db: AsyncSession) -> CatalogAsset:

@@ -6,6 +6,30 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
+class MeetingPlan(Base):
+    __tablename__ = 'meeting_plans'
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    requester_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('user_profiles.id'), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default='Draft')
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    recommendations: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    recommendation_hash: Mapped[str | None] = mapped_column(String(64))
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('demo_request_batches.id'), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class MeetingPlanAsset(Base):
+    __tablename__ = 'meeting_plan_assets'
+    __table_args__ = (UniqueConstraint('plan_id','asset_id',name='uq_meeting_plan_asset'),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('meeting_plans.id',ondelete='CASCADE'), nullable=False, index=True)
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('catalog_assets.id',ondelete='SET NULL'))
+    asset_title: Mapped[str] = mapped_column(String, nullable=False)
+    selected_via: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
 class EvaluationJob(Base):
     __tablename__ = 'evaluation_jobs'
     __table_args__ = (UniqueConstraint('entity_type', 'entity_id', name='uq_evaluation_target'),)
