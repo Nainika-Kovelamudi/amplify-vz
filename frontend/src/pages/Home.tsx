@@ -459,14 +459,14 @@ export function Home() {
               <div style={{ background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.22)', borderRadius: 10, padding: '8px 10px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
                 <div style={{ background: '#ffffff', borderRadius: 6, padding: 4, lineHeight: 0 }}>
                   <img
-                    src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=https://aimplify.infovision.ai&color=1a237e&bgcolor=ffffff"
-                    alt="QR – aimplify.infovision.ai"
+                    src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=https://vz.amplify.infovision.ai&color=1a237e&bgcolor=ffffff"
+                    alt="QR – vz.amplify.infovision.ai"
                     width={80} height={80}
                     style={{ display: 'block', borderRadius: 3 }}
                   />
                 </div>
                 <p style={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.55)', margin: 0, textAlign: 'center' }}>
-                  aimplify.infovision.ai
+                  vz.amplify.infovision.ai
                 </p>
               </div>
 

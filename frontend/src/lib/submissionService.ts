@@ -70,6 +70,7 @@ export interface ApprovedIdeation { id: string; title: string; family?: string }
 
 export async function getApprovedIdeations(): Promise<ApprovedIdeation[]> {
   const { data } = await apiClient.get<{ items: ApprovedIdeation[] }>('/integrations/aiv/ideations');
+  if (!Array.isArray(data?.items)) throw new Error('AIV ideations returned an unexpected response.');
   return data.items;
 }
 

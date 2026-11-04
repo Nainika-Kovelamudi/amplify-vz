@@ -100,7 +100,7 @@ def create_app() -> FastAPI:
     # Canonical AIMPLIFY frontends must remain allowed even when an Azure slot
     # still carries an older Static Web Apps hostname in FRONTEND_URL/CORS_ORIGINS.
     default_origins.update({
-        "https://aimplify.infovision.ai",
+        "https://vz.amplify.infovision.ai",
         "https://aimplify-dev.infovision.ai",
     })
     origins = list(set(_cors_list) | default_origins)
